@@ -1,0 +1,5 @@
+requests==2.34.2
+click==8.5.0
+pycryptodome==4.2.0
+prettytable==3.18.0
+mutagen==1.47.0

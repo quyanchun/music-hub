@@ -1,0 +1,29 @@
+{
+  "date": "2026-11-09",
+  "origin": "Parent project adapters, copied without edits",
+  "files": {
+    "charts.py": "d6d478568d2aeb59ee61e00792c813e85657804a1f050f75165ba68828782514",
+    "kugou.py": "d51a49ee61c9c28868a7fab36c77b1939ba0b2f19105cc7969f4dbed9d34c831",
+    "kuwo.py": "116505bfeaeadace2a507ee7d009f59988c8cb58483bc1a81da453e97e63aca1",
+    "migu.py": "7f6a8689b75464eacd1b2b3e3aa971801eed3bad2c36679fc1be27527e9d9f03",
+    "qq.py": "b3bddf1f3bd80fa5d0ec7ef2b2a9265cd4173d988b9f946d25ab9adfdddff273",
+    "vendor/LICENSE": "b3d8396e478e8d3ebb8809bbe73015b617a3a66e2feaf49fff61a600c1744952",
+    "vendor/music_dl/__init__.py": "d0dd05aba531191578353211acd37dd97a55c58428bee20422129cf6bf614821",
+    "vendor/music_dl/__main__.py": "734286d6bdb4abaca89380495bfb211ffda880ba9331972638291a8383b13a20",
+    "vendor/music_dl/__version__.py": "c6814bba4ae9906146f7ea9e5f3860f82a083fe173c1642f07cf6ef8245721e3",
+    "vendor/music_dl/addons/__init__.py": "eee00dd33ae826bb443c843759f10681d274bf864f2f81aa6d8b3e8dae2c30e9",
+    "vendor/music_dl/addons/baidu.py": "403c641e7fc69ca48bf6e4e261adde6e3677c0eccafcc86cb6f48091986c2b17",
+    "vendor/music_dl/addons/kugou.py": "b26e97ceb4fcb1f10346fed31446fd2d4998f3ad48749a53e6db5fd06c0c5a88",
+    "vendor/music_dl/addons/migu.py": "1e1325590a4fa13bb8af2331f5d159e59e2ae3c88a4ecf5e57e4189a1c34a5bf",
+    "vendor/music_dl/addons/netease.py": "6db49d771993fced4532162c2c035cfd6fb8c9408033d3377507d71189afe582",
+    "vendor/music_dl/addons/qq.py": "c86bd055eb934e62879b1d3cb25bb88ef8353654957114032b14e559e2f58715",
+    "vendor/music_dl/addons/xiami.py": "1332eadeb7f6bf9c8410116b2eb3df63874dcedfdf9179cfe0b9d03010207a1b",
+    "vendor/music_dl/api.py": "0fdd140442ff45d031ee31c39b6ac124c3105f142a28977604cd168cc6b6661d",
+    "vendor/music_dl/config.py": "13588895b49054581c1553ddcedbb91f7c191af57a76e00fe385e3e757a61be9",
+    "vendor/music_dl/exceptions.py": "b014a395ea810e842477664676b9ee965251b136362175dd4f3e0f84e01f2e1b",
+    "vendor/music_dl/player.py": "93e79ed0deadd3a85a2b638a274c02e8b4e198b1d3d08a26b68399863f94d5aa",
+    "vendor/music_dl/song.py": "13b4ccab503ddb8bfb68e2c518af7c1e62aa08beb8c287f99e24ba3a61e491a9",
+    "vendor/music_dl/source.py": "6a3a3d5a9a6fb6ac927981d8f65784150cded49dbb358c67026f20b44353dd58",
+    "vendor/music_dl/utils.py": "af91dcd584050c3968d2657b8c1afcbcace6b8178aae9db352c2e152506c4ce1"
+  }
+}

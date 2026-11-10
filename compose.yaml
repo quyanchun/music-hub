@@ -1,0 +1,29 @@
+services:
+  music-hub:
+    image: ghcr.io/quyanchun/music-hub:latest
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${MUSICHUB_BIND:-0.0.0.0}:${MUSICHUB_PORT:-8766}:8766"
+    volumes:
+      - music-hub-data:/experiment/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    environment:
+      TZ: Asia/Shanghai
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+volumes:
+  music-hub-data:
