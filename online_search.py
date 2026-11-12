@@ -46,8 +46,8 @@ def source_search(source, query):
 
 
 class OnlineSearch:
-    def __init__(self, catalog):
-        self.catalog = catalog
+    def __init__(self, catalog, media=None):
+        self.catalog, self.media = catalog, media
         self.workers = ThreadPoolExecutor(max_workers=10, thread_name_prefix='search-source')
         self.queries = ThreadPoolExecutor(max_workers=2, thread_name_prefix='search-query')
         self.guard = threading.RLock()
@@ -70,7 +70,7 @@ class OnlineSearch:
         key = hashlib.sha256((str(source) + '\0' + canonical).encode()).hexdigest()
         cached = self.cached(key)
         if cached is not None:
-            return cached
+            return self.merge(query, source, cached)
         with self.guard:
             future = self.flights.get(key)
             if future is None:
@@ -98,10 +98,33 @@ class OnlineSearch:
             artist = record.get('singer') or '未知歌手'
             if (not source or record['source'] == source) and matches(record['title'] + ' ' + artist + ' ' + album, query):
                 keys.append(row['key'])
+                if len(keys) >= 500: break
         return keys
+
+    def merge(self, query, source, remote):
+        ids = list(dict.fromkeys(self.local(query, source) + remote))
+        rows = list(self.catalog.iter_visible(ids))
+        cached = set()
+        if self.catalog.has_audio:
+            with self.catalog.connect() as db:
+                cached = {r['song_id'] for r in db.execute('SELECT a.song_id FROM audio_aliases a JOIN audio_files f ON f.id=a.file_id WHERE f.verified=1 AND a.song_id IN (' + ','.join('?' for _ in ids) + ')', ids)} if ids else set()
+        rows.sort(key=lambda r: (r['key'] not in cached, normalized(r['record']['title']) != normalized(query)))
+        result, seen = [], {}
+        from media import recording_key
+        for row in rows:
+            record = row['record']
+            identity, duration = recording_key(record), seconds(record)
+            if any(abs(duration-old)<=3 for old in seen.get(identity, ())): continue
+            seen.setdefault(identity, []).append(duration)
+            result.append(row['key'])
+        return result
 
     def check(self, song):
         key = identifier(song['source'], song['id'])
+        if self.media and self.media.cached(key, verified=True):
+            with self.catalog.connect() as db:
+                row = db.execute('SELECT media FROM songs WHERE id=?', (key,)).fetchone()
+            return song, json.loads(row['media'])
         with self.catalog.connect() as db:
             row = db.execute('SELECT status,media,checked FROM songs WHERE id=?', (key,)).fetchone()
         if row and row['status'] == 'accepted' and row['checked']:
@@ -167,12 +190,10 @@ class OnlineSearch:
                 stats['verified'] += 1
             except Exception:
                 stats['unverified'] += 1
-                self.catalog.exclude(identifier(song['source'], song['id']), 'unverified_in_search')
-        ids = list(dict.fromkeys(admitted + self.local(query, source)))
-        titles = {r['key']: r['record']['title'] for r in self.catalog.iter_visible(ids)}
-        ids = [key for key in ids if key in titles]
-        # Exact titles first; stable platform rank retained otherwise, including pagination.
-        ids.sort(key=lambda k: normalized(titles[k]) != normalized(query))
+                key_id = identifier(song['source'], song['id'])
+                if not (self.media and self.media.cached(key_id, verified=True)):
+                    self.catalog.exclude(key_id, 'unverified_in_search')
+        ids = self.merge(query, source, admitted)
         ttl = CACHE_SECONDS if results else 30
         with self.catalog.connect() as db:
             db.execute('DELETE FROM searches WHERE expires<?', (time.time(),))

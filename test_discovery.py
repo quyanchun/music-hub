@@ -11,6 +11,9 @@ from test_service import HTTPFixture, insert, record
 
 
 class DiscoveryTests(HTTPFixture):
+    def recommend(self, endpoint, params):
+        return {'randomSongs': {'song': self.app.discovery.select(Library(self.app.catalog), params.get('size',10), params)}}
+
     def populate(self, count=140, pool=90):
         keys = []
         for n in range(count):
@@ -24,8 +27,8 @@ class DiscoveryTests(HTTPFixture):
 
     def test_two_fifty_song_batches_explore_and_do_not_repeat(self):
         keys = self.populate()
-        first = self.api('getRandomSongs', {'size': 50})['randomSongs']['song']
-        second = self.api('getRandomSongs', {'size': 50})['randomSongs']['song']
+        first = self.recommend('getRandomSongs', {'size': 50})['randomSongs']['song']
+        second = self.recommend('getRandomSongs', {'size': 50})['randomSongs']['song']
         self.assertEqual((len(first), len(second)), (50, 50))
         self.assertGreaterEqual(sum(s['id'] in keys[:90] for s in first), 40)
         self.assertFalse({identity(s) for s in first} & {identity(s) for s in second})
@@ -42,7 +45,7 @@ class DiscoveryTests(HTTPFixture):
         copy = insert(self.app.catalog, song)
         original = identifier('netease', 'discovery-0')
         self.app.catalog.annotate([original], 'scrobble')
-        songs = self.api('getRandomSongs', {'size': 50})['randomSongs']['song']
+        songs = self.recommend('getRandomSongs', {'size': 50})['randomSongs']['song']
         self.assertNotIn(copy, [s['id'] for s in songs])
         self.assertNotIn(original, [s['id'] for s in songs])
         self.assertEqual(len({identity(s) for s in songs}), 50)
@@ -50,7 +53,7 @@ class DiscoveryTests(HTTPFixture):
             song = record('same-artist-' + str(n))
             song.update(title='同歌手曲目' + str(n), singer='同一个歌手')
             insert(self.app.catalog, song)
-        songs = self.api('getRandomSongs', {'size': 30})['randomSongs']['song']
+        songs = self.recommend('getRandomSongs', {'size': 30})['randomSongs']['song']
         self.assertLessEqual(sum(s['artist'] == '同一个歌手' for s in songs), 2)
 
     def test_concurrent_cards_are_disjoint(self):
@@ -62,10 +65,10 @@ class DiscoveryTests(HTTPFixture):
     def test_filters_zero_small_pool_and_excluded_tracks(self):
         keys = self.populate(3, 3)
         self.app.catalog.exclude(keys[0], 'trial')
-        self.assertEqual(self.api('getRandomSongs', {'size': 0})['randomSongs']['song'], [])
-        filtered = self.api('getRandomSongs', {'size': 50, 'musicFolderId': '2'})['randomSongs']['song']
+        self.assertEqual(self.recommend('getRandomSongs', {'size': 0})['randomSongs']['song'], [])
+        filtered = self.recommend('getRandomSongs', {'size': 50, 'musicFolderId': '2'})['randomSongs']['song']
         self.assertEqual(filtered, [])
-        songs = self.api('getRandomSongs', {'size': 50, 'genre': '网易云'})['randomSongs']['song']
+        songs = self.recommend('getRandomSongs', {'size': 50, 'genre': '网易云'})['randomSongs']['song']
         self.assertNotIn(keys[0], [s['id'] for s in songs])
         self.assertTrue(all(s['genre'] == '网易云' for s in songs))
         self.assertEqual(len(songs), 4)
@@ -95,7 +98,7 @@ class DiscoveryTests(HTTPFixture):
         state = self.app.catalog.status()['discovery']
         self.assertEqual(state['error'], 'TimeoutError')
         self.assertFalse(state['running'])
-        songs = self.api('getRandomSongs', {'size': 4})['randomSongs']['song']
+        songs = self.recommend('getRandomSongs', {'size': 4})['randomSongs']['song']
         self.assertTrue(songs)
 
     def test_public_seed_fetches_varying_playlists_not_fixed_charts(self):

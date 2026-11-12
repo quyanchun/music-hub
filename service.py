@@ -13,6 +13,7 @@ import secrets
 import signal
 import string
 import struct
+import tempfile
 import threading
 import time
 from urllib.parse import parse_qs, quote, urlsplit
@@ -21,12 +22,14 @@ import zlib
 
 from catalog import Catalog
 from discovery import Discovery
-from library import FOLDERS, Library, matches
-from media import MediaCache
+from library import FOLDERS, Library, matches, song_entry
+from media import MediaCache, CachedSongs, CACHE_PLAYLIST
 from maintenance import Maintenance
 from metadata import MetadataCache, structured_lyrics
 from online_search import OnlineSearch
 from public_playlists import PublicPlaylists
+from prefetch import Prefetch
+from wire import xml_parts
 from resolver import NAMES
 
 
@@ -109,12 +112,13 @@ class App(ThreadingHTTPServer):
         self.account = credentials(self.catalog.folder)
         self.media = MediaCache(self.catalog)
         self.metadata = MetadataCache(self.catalog)
-        self.search = OnlineSearch(self.catalog)
+        self.search = OnlineSearch(self.catalog, self.media)
         self.discovery = Discovery(self.catalog, self.search)
+        self.prefetch = Prefetch(self.catalog, self.media, self.search)
         self.public_playlists = PublicPlaylists(self.catalog)
         self.maintenance = Maintenance(self.catalog, self.media, self.metadata)
         self.stop_event = threading.Event()
-        self.view_slots = threading.BoundedSemaphore(2)
+        self.view_slots = threading.BoundedSemaphore(1)
         super().__init__(address, Handler)
 
     def server_close(self):
@@ -161,7 +165,8 @@ class App(ThreadingHTTPServer):
                 self.catalog.start_scan()
             status = self.catalog.status()
             return {'scanStatus': {'scanning': bool(status.get('scan', {}).get('running')),
-                                   'count': status['counts'].get('accepted', 0)}}
+                                   'count': status['counts'].get('accepted', 0),
+                                   'cachedSongCount': self.media.summary()['count'], 'cachedBytes': self.media.summary()['bytes']}}
         if endpoint == 'getUser':
             username = self.account['username']
             if params.get('username', username) != username:
@@ -172,7 +177,7 @@ class App(ThreadingHTTPServer):
                 'podcastRole': False, 'streamRole': True, 'jukeboxRole': False, 'shareRole': False,
                 'videoConversionRole': False, 'folder': [int(k) for k in FOLDERS]}}
         if endpoint in ('star', 'unstar', 'setRating', 'scrobble'):
-            ids = repeated.get('id', [])
+            ids = [key.removeprefix('cache-') for key in repeated.get('id', [])]
             if not ids:
                 raise APIError(10, 'Song id required')
             rating = int(params.get('rating', 0))
@@ -183,6 +188,20 @@ class App(ThreadingHTTPServer):
             return {}
         if endpoint == 'getMusicFolders':
             return {'musicFolders': {'musicFolder': [{'id': int(k), 'name': NAMES[v]} for k, v in FOLDERS.items()]}}
+        if endpoint == 'getRandomSongs':
+            return {'randomSongs': {'song': self.prefetch.daily(amount('size', 10), params)}}
+        if endpoint == 'getSong' and params['id'].startswith('cache-'):
+            return {'song': self.media.entry(params['id'][6:])}
+        if endpoint == 'getPlaylists':
+            return {'playlists': {'playlist': list(self.catalog.playlist_headers(self.account['username'])) + [self.media.playlist(self.account['username'])]}}
+        if endpoint == 'getPlaylist':
+            if params['id'] == CACHE_PLAYLIST:
+                return {'playlist': self.media.playlist(self.account['username'], entries=True)}
+            header = next((p for p in self.catalog.playlist_headers(self.account['username']) if p['id']==params['id']), None)
+            if header is None: raise KeyError(params['id'])
+            return {'playlist': {**header,'entry':[song_entry(row) for row in self.catalog.playlist_rows(params['id'])]}}
+        if params.get('id','').startswith('cache-'):
+            params = {**params, 'id':params['id'][6:]}
         search_keys = None
         if endpoint in ('search2', 'search3'):
             query = params.get('query', '').strip().strip('"')
@@ -195,7 +214,17 @@ class App(ThreadingHTTPServer):
                 amount(kind + 'Offset', 0)
             if query and any(amount(kind + 'Count') for kind in ('song', 'album', 'artist')):
                 search_keys = self.search.search(query, params.get('musicFolderId'))
+        if endpoint in ('search2','search3') and search_keys is None and amount('artistCount')==0 and amount('albumCount')==0:
+            source = FOLDERS.get(str(params.get('musicFolderId')))
+            found, offset, count = [], amount('songOffset',0), amount('songCount')
+            for row in self.catalog.iter_visible():
+                if source and row['record']['source']!=source: continue
+                if offset: offset-=1; continue
+                if len(found)>=count: break
+                found.append(song_entry(row))
+            return {'searchResult3' if endpoint.endswith('3') else 'searchResult2': {'song':found,'album':[],'artist':[]}}
         scope = [params['id']] if endpoint in ('getSong', 'getLyrics', 'getLyricsBySongId') and params.get('id') else None
+        if search_keys is not None: scope = search_keys
         library = Library(self.catalog, scope)
         public = library.public
         songs = library.filtered_songs(params.get('musicFolderId'))
@@ -246,16 +275,6 @@ class App(ThreadingHTTPServer):
             return {'searchResult3' if endpoint.endswith('3') else 'searchResult2': {
                 'song': page(found, 'songCount', 'songOffset'), 'album': page(albums, 'albumCount', 'albumOffset'),
                 'artist': page(artists, 'artistCount', 'artistOffset')}}
-        if endpoint in ('getPlaylists', 'getPlaylist'):
-            playlists = library.playlists(self.account['username'])
-            if endpoint == 'getPlaylists':
-                return {'playlists': {'playlist': [public(p) for p in playlists]}}
-            playlist = next((p for p in playlists if p['id'] == params['id']), None)
-            if playlist is None:
-                raise KeyError(params['id'])
-            return {'playlist': {**public(playlist), 'entry': playlist['_members']}}
-        if endpoint == 'getRandomSongs':
-            return {'randomSongs': {'song': self.discovery.select(library, amount('size', 10), params)}}
         if endpoint == 'getSongsByGenre':
             return {'songsByGenre': {'song': page([s for s in songs if s['genre'] == params.get('genre')], 'count', default=10)}}
         if endpoint == 'getGenres':
@@ -321,11 +340,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, result, params, error=None):
         body = {'status': 'failed' if error else 'ok', 'version': '1.16.1',
-                'type': 'musichub', 'serverVersion': '0.1.6', 'openSubsonic': True, **result}
+                'type': 'musichub', 'serverVersion': '0.1.7', 'openSubsonic': True, **result}
         if error:
             body['error'] = {'code': error.code, 'message': error.message}
             print(json.dumps({'event': 'api_error', 'code': error.code,
                               'path': urlsplit(self.path).path[:200]}, ensure_ascii=False), flush=True)
+        if isinstance(result.get('playlist',{}).get('entry'), CachedSongs):
+            is_json = params.get('f','xml')=='json'
+            parts = json.JSONEncoder(ensure_ascii=False).iterencode({'subsonic-response':body}) if is_json else xml_parts('subsonic-response',body,root=True)
+            with tempfile.TemporaryFile(dir=self.server.catalog.folder) as output:
+                for chunk in parts: output.write(chunk.encode())
+                self.send_response(200)
+                self.send_header('Content-Type','application/json; charset=utf-8' if is_json else 'text/xml; charset=utf-8')
+                self.send_header('Content-Length',str(output.tell()))
+                self.send_header('Cache-Control','private, no-store')
+                self.end_headers()
+                if self.command!='HEAD':
+                    output.seek(0)
+                    while chunk:=output.read(65536): self.wfile.write(chunk)
+            return
         if params.get('f', 'xml') == 'json':
             self.send_bytes(json.dumps({'subsonic-response': body}, ensure_ascii=False).encode(), 'application/json; charset=utf-8')
         else:
@@ -366,7 +399,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.audio(params)
             if endpoint in ('getCoverArt', 'getAvatar'):
                 key = params.get('id', params.get('username', ''))
-                keys = self.server.catalog.cover_keys(key)
+                keys = self.server.catalog.cover_keys(key.removeprefix('cache-'))
                 cover_key = next((k for k in keys if (self.server.metadata.cached(k) or {}).get('cover_url')), None)
                 actual = self.server.metadata.cover(cover_key) if cover_key else None
                 if actual:
@@ -389,7 +422,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def audio(self, params):
         key = params['id']
-        if not re.fullmatch(r'[a-f0-9]{32}', key):
+        if not re.fullmatch(r'(?:cache-)?[a-f0-9]{32}', key):
             raise KeyError(key)
         with self.server.media.open_audio(key) as (file, stream):
             size = os.fstat(stream.fileno()).st_size
@@ -458,6 +491,7 @@ def main():
     threading.Thread(target=app.refresh_loop, daemon=True, name='catalog-refresh').start()
     threading.Thread(target=app.discovery.loop, args=(app.stop_event,), daemon=True, name='music-discovery').start()
     threading.Thread(target=app.maintenance.loop, args=(app.stop_event,), daemon=True, name='disk-maintenance').start()
+    threading.Thread(target=app.prefetch.loop, args=(app.stop_event,), daemon=True, name='audio-prefetch').start()
     threading.Thread(target=app.public_playlists.loop, args=(app.stop_event,), daemon=True, name='public-playlists').start()
     print(f'MusicHub listening on {args.port}; credentials stored in data/credentials.json', flush=True)
     try:

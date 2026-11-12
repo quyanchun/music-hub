@@ -39,6 +39,9 @@ class Maintenance:
                 for row in db.execute('SELECT members FROM boards'):
                     db.executemany('INSERT OR IGNORE INTO keep_songs VALUES (?)', ((key,) for key in json.loads(row['members'])))
                 db.execute('INSERT OR IGNORE INTO keep_songs SELECT id FROM annotations WHERE starred IS NOT NULL OR rating>0 OR play_count>0')
+                if 'audio_files' in tables:
+                    db.execute('INSERT OR IGNORE INTO keep_songs SELECT id FROM audio_files')
+                    db.execute('INSERT OR IGNORE INTO keep_songs SELECT song_id FROM audio_aliases')
                 if 'discoveries' in tables:
                     db.execute('DELETE FROM discoveries WHERE added<? OR id NOT IN (SELECT id FROM songs)', (now - 30 * 86400,))
                     db.execute('INSERT OR IGNORE INTO keep_songs SELECT id FROM discoveries')

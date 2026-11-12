@@ -20,7 +20,7 @@ class MemoryTests(HTTPFixture):
             library.assert_not_called()
             self.assertEqual(self.api('getSong', {'id': self.ids[0]})['song']['id'], self.ids[0])
             library.assert_called_once_with(self.app.catalog, [self.ids[0]])
-        with self.app.view_slots, self.app.view_slots:
+        with self.app.view_slots:
             self.assertEqual(self.api('ping')['status'], 'ok')
             self.assertEqual(self.api('getSong', {'id': self.ids[0]})['song']['id'], self.ids[0])
         with patch.object(self.app.catalog, 'visible', side_effect=AssertionError('eager catalog load')):

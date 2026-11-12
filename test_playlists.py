@@ -65,7 +65,7 @@ class PublicPlaylistTests(HTTPFixture):
             entries = self.api('getPlaylist', {'id': playlist['id']})['playlist']['entry']
         self.assertEqual(playlist['songCount'], 2)
         self.assertEqual([s['id'] for s in entries], list(reversed(self.ids)))
-        self.assertEqual(len(lists), 2)  # Existing chart remains available.
+        self.assertEqual(len(lists), 3)  # Existing chart remains available.
         _, _, xml = self.request('getPlaylist', {'id': playlist['id'], 'f': 'xml'})
         self.assertIn(b'<entry ', xml)
 
@@ -81,7 +81,7 @@ class PublicPlaylistTests(HTTPFixture):
     def test_fully_restricted_and_unreadable_playlists_are_hidden(self):
         cards = [{'id': str(n), 'source': 'netease', 'name': '歌单' + str(n)} for n in range(2)]
         self.refresh(cards, [{'songs': [record('paid', True)], 'total': 1, 'has_more': False}, ValueError('private')])
-        self.assertEqual(len(self.api('getPlaylists')['playlists']['playlist']), 1)
+        self.assertEqual(len(self.api('getPlaylists')['playlists']['playlist']), 2)
 
     def test_dead_source_snapshot_expires_and_maintenance_preserves_live_playlist_songs(self):
         card = {'id': 'live', 'source': 'netease', 'name': '保留歌单'}
@@ -94,9 +94,9 @@ class PublicPlaylistTests(HTTPFixture):
             db.execute('UPDATE public_playlist_catalog SET updated=?', (time.time() - 90000,))
         with patch('public_playlists.NAMES', {'netease': '网易云'}), patch('public_playlists.list_playlists', side_effect=ValueError('offline')):
             self.app.public_playlists.refresh()
-        self.assertEqual(len(self.api('getPlaylists')['playlists']['playlist']), 1)
+        self.assertEqual(len(self.api('getPlaylists')['playlists']['playlist']), 2)
 
-    def test_audio_aac_range_mime_and_expiry(self):
+    def test_audio_aac_range_mime_and_persistence(self):
         key = self.ids[0]
         old = self.app.media.folder / (key + '.mp3')
         target = old.with_suffix('.aac')
@@ -106,4 +106,4 @@ class PublicPlaylistTests(HTTPFixture):
         import os
         os.utime(target, (time.time() - 90000,) * 2)
         self.app.maintenance.run()
-        self.assertFalse(target.exists())
+        self.assertTrue(target.exists())

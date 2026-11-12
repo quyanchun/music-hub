@@ -45,9 +45,9 @@ class AudioInspector:
 INSPECTOR = AudioInspector()
 
 
-def inspect_audio(target, headers=None):
+def inspect_audio(target, headers=None, background=False):
     # Search and playback share this budget; ten FFmpeg processes dwarf the API.
-    with INSPECTOR.slot(playback=headers is None):
+    with INSPECTOR.slot(playback=headers is None and not background):
         command = ['ffprobe', '-v', 'error', '-threads', '1']
         if headers is not None:
             command += ['-rw_timeout', '4000000', '-protocol_whitelist', 'http,https,tcp,tls',

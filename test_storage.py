@@ -42,7 +42,7 @@ class StorageTests(HTTPFixture):
             self.assertTrue(path.exists())
             self.assertEqual(stream.read(3), b'ID3')
         self.app.maintenance.run()
-        self.assertFalse(path.exists())
+        self.assertTrue(path.exists())  # persistent audio does not expire after 24 hours
         active = self.file(self.app.media.folder, 110, '.part', age=7200)
         lock = threading.Lock()
         self.app.media.locks[active.stem] = lock

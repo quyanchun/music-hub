@@ -46,7 +46,7 @@ def main():
     folders = api('getMusicFolders')['musicFolders']['musicFolder']
     assert len(folders) == 5
     playlists = api('getPlaylists')['playlists']['playlist']
-    assert len([p for p in playlists if not p['id'].startswith('pl-')]) == 15
+    assert len([p for p in playlists if p['id']!='cached-songs' and not p['id'].startswith('pl-')]) == 15
     results['playlists'] = [{'name': p['name'], 'songs': p['songCount']} for p in playlists]
     results['checks']['fifteen_chart_playlists'] = True
     all_songs, offset = [], 0

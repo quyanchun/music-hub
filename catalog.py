@@ -29,10 +29,12 @@ class Catalog:
         self.folder.mkdir(parents=True, exist_ok=True)
         self.path = self.folder / 'catalog.sqlite3'
         self.scan_lock = threading.Lock()
+        self.has_audio = False
         fresh = not self.path.exists() or self.path.stat().st_size == 0
         with self.connect() as db:
             if fresh:
                 db.execute('PRAGMA auto_vacuum=INCREMENTAL')
+            self.has_audio = bool(db.execute("SELECT 1 FROM sqlite_master WHERE name='audio_files'").fetchone())
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS songs (
@@ -96,18 +98,42 @@ class Catalog:
         with self.connect() as db:
             return [dict(r) for r in db.execute('SELECT * FROM boards ORDER BY id')]
 
+    def visibility(self, alias='songs'):
+        condition = f"{alias}.status='accepted'"
+        if self.has_audio:
+            condition += f' OR EXISTS(SELECT 1 FROM audio_aliases ca JOIN audio_files cf ON cf.id=ca.file_id WHERE ca.song_id={alias}.id)'
+        return '(' + condition + ')'
+
+    @staticmethod
+    def view_row(row):
+        return {'key': row['id'], 'record': json.loads(row['data']), 'media': json.loads(row['media']), 'checked': row['checked'],
+                **{k: row[k] for k in ('starred', 'rating', 'play_count', 'last_played')}}
+
     def iter_visible(self, keys=None):
         if keys is not None and not keys:
             return
         with self.connect() as db:
-            query = "SELECT s.id,s.data,s.media,s.checked,a.starred,a.rating,a.play_count,a.last_played FROM songs s LEFT JOIN annotations a USING(id) WHERE status='accepted'"
+            query = "SELECT s.id,s.data,s.media,s.checked,a.starred,a.rating,a.play_count,a.last_played FROM songs s LEFT JOIN annotations a USING(id) WHERE " + self.visibility("s")
             values = [] if keys is None else list(keys)
             if keys is not None:
                 query += ' AND s.id IN (' + ','.join('?' for _ in values) + ')'
             for row in db.execute(query, values):
-                yield {'key': row['id'], 'record': json.loads(row['data']),
-                              'media': json.loads(row['media']), 'checked': row['checked'],
-                              **{k: row[k] for k in ('starred', 'rating', 'play_count', 'last_played')}}
+                yield self.view_row(row)
+
+    def playlist_rows(self, key):
+        with self.connect() as db:
+            query = "SELECT s.id,s.data,s.media,s.checked,a.starred,a.rating,a.play_count,a.last_played FROM boards b,json_each(b.members) m JOIN songs s ON s.id=m.value LEFT JOIN annotations a ON a.id=s.id WHERE b.id=? AND " + self.visibility('s') + " ORDER BY cast(m.key AS INTEGER)"
+            for row in db.execute(query, (key,)):
+                yield self.view_row(row)
+
+    def playlist_headers(self, username):
+        with self.connect() as db:
+            for board in db.execute('SELECT id,name,total,updated FROM boards ORDER BY id'):
+                row = db.execute("SELECT count(*) AS count,coalesce(sum(json_extract(s.media,'$.duration')),0) AS duration FROM boards b,json_each(b.members) m JOIN songs s ON s.id=m.value WHERE b.id=? AND " + self.visibility('s'), (board['id'],)).fetchone()
+                if board['id'].startswith('pl-') and not row['count']: continue
+                yield {'id':board['id'],'name':board['name'],'owner':username,'public':False,'songCount':row['count'],
+                       'duration':int(row['duration']),'created':board['updated'],'changed':board['updated'],
+                       'comment':f"公开可播曲目；原单 {board['total']} 首"}
 
     def cover_keys(self, key):
         from resolver import NAMES
@@ -138,8 +164,9 @@ class Catalog:
             return keys
 
     def song(self, song_id):
+        song_id = song_id.removeprefix('cache-')
         with self.connect() as db:
-            row = db.execute("SELECT * FROM songs WHERE id=? AND status='accepted'", (song_id,)).fetchone()
+            row = db.execute("SELECT * FROM songs WHERE id=? AND " + self.visibility(), (song_id,)).fetchone()
         if not row:
             raise KeyError(song_id)
         self.touch(song_id)
@@ -157,7 +184,7 @@ class Catalog:
     def annotate(self, ids, operation, value=None):
         with self.connect() as db:
             for song_id in ids:
-                if not db.execute("SELECT 1 FROM songs WHERE id=? AND status='accepted'", (song_id,)).fetchone():
+                if not db.execute("SELECT 1 FROM songs WHERE id=? AND " + self.visibility(), (song_id,)).fetchone():
                     raise KeyError(song_id)
                 db.execute('INSERT OR IGNORE INTO annotations(id) VALUES (?)', (song_id,))
                 if operation == 'star':

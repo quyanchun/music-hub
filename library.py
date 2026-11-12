@@ -22,32 +22,40 @@ def artist_names(value):
     return {normalized(name) for name in re.split(r'[、,，;&；]|\s+feat\.?\s+', value, flags=re.I) if normalized(name)}
 
 
+def song_entry(row):
+    record, media = row['record'], row['media']
+    source = record['source']
+    artist = record.get('singer') or '未知歌手'
+    album = record.get('album') or NAMES[source] + ' · 榜单精选'
+    artist_id = 'ar' + identifier(source, artist)
+    album_id = 'al' + identifier(source, artist + '\0' + album)
+    suffix = media.get('suffix', 'mp3')
+    song = {'id': row['key'], 'parent': album_id, 'isDir': False,
+            'title': record['title'], 'album': album, 'artist': artist,
+            'artistId': artist_id, 'albumId': album_id,
+            'coverArt': album_id, 'duration': int(media.get('duration') or 0),
+            'size': int(media.get('size') or 0), 'suffix': suffix,
+            'contentType': {'aac': 'audio/aac', 'm4a': 'audio/mp4', 'mp3': 'audio/mpeg', 'flac': 'audio/flac', 'ogg': 'audio/ogg', 'wav': 'audio/wav', 'ape': 'audio/ape'}.get(suffix, 'audio/mpeg'),
+            'bitRate': int(media.get('bitrate') or 128),
+            'genre': NAMES[source], 'type': 'music', 'isVideo': False,
+            'path': f'{NAMES[source]}/{artist}/{album}/{record["title"]}.{suffix}',
+            'created': row['checked'], 'playCount': row['play_count'] or 0,
+            'userRating': row['rating'] or 0}
+    if row['starred']:
+        song['starred'] = row['starred']
+    return song
+
+
 class Library:
     def __init__(self, catalog, keys=None):
         rows, boards = catalog.iter_visible(keys), catalog.boards()
         self.songs, self.albums, self.artists = {}, {}, {}
         self.boards = boards
         for row in rows:
-            record, media = row['record'], row['media']
-            source = record['source']
-            artist = record.get('singer') or '未知歌手'
-            album = record.get('album') or NAMES[source] + ' · 榜单精选'
-            artist_id = 'ar' + identifier(source, artist)
-            album_id = 'al' + identifier(source, artist + '\0' + album)
-            suffix = media.get('suffix', 'mp3')
-            song = {'id': row['key'], 'parent': album_id, 'isDir': False,
-                    'title': record['title'], 'album': album, 'artist': artist,
-                    'artistId': artist_id, 'albumId': album_id,
-                    'coverArt': album_id, 'duration': int(media.get('duration') or 0),
-                    'size': int(media.get('size') or 0), 'suffix': suffix,
-                    'contentType': {'aac': 'audio/aac', 'm4a': 'audio/mp4', 'mp3': 'audio/mpeg', 'flac': 'audio/flac', 'ogg': 'audio/ogg', 'wav': 'audio/wav', 'ape': 'audio/ape'}.get(suffix, 'audio/mpeg'),
-                    'bitRate': int(media.get('bitrate') or 128),
-                    'genre': NAMES[source], 'type': 'music', 'isVideo': False,
-                    'path': f'{NAMES[source]}/{artist}/{album}/{record["title"]}.{suffix}',
-                    'created': row['checked'], 'playCount': row['play_count'] or 0,
-                    'userRating': row['rating'] or 0}
-            if row['starred']:
-                song['starred'] = row['starred']
+            song = song_entry(row)
+            source = row['record']['source']
+            artist, album = song['artist'], song['album']
+            artist_id, album_id = song['artistId'], song['albumId']
             self.songs[song['id']] = song
             self.albums.setdefault(album_id, {'id': album_id, 'parent': artist_id, 'isDir': True,
                 'name': album, 'title': album, 'artist': artist, 'artistId': artist_id,

@@ -17,8 +17,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    mem_limit: 256m
-    memswap_limit: 256m
+    mem_limit: 180000000
+    memswap_limit: 180000000
     pids_limit: 128
     logging:
       driver: json-file
