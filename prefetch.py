@@ -16,7 +16,7 @@ class Prefetch:
         self.catalog, self.media, self.search = catalog, media, search
         self.interval = max(5, float(os.environ.get('MUSICHUB_PREFETCH_INTERVAL', '10')))
         self.daily_size = 50
-        self.extra_limit = int(os.environ.get('MUSICHUB_EXTRA_CACHE_DAILY', '100'))
+        self.download_interval = max(180, float(os.environ.get('MUSICHUB_CACHE_INTERVAL', '180')))
         self.lock = threading.Lock()
         self.next_reconcile = 0
 
@@ -27,18 +27,19 @@ class Prefetch:
             count = db.execute('SELECT count(*) FROM daily_tracks d JOIN audio_files f ON f.id=d.file_id WHERE day=? AND f.verified=1', (day,)).fetchone()[0]
             if count < self.daily_size:
                 rows = db.execute('''SELECT f.id FROM audio_files f WHERE verified=1
-                    AND NOT EXISTS(SELECT 1 FROM daily_tracks d WHERE d.file_id=f.id AND d.day>=?)
-                    ORDER BY random() LIMIT ?''', (cutoff, self.daily_size-count)).fetchall()
+                    AND NOT EXISTS(SELECT 1 FROM daily_tracks d WHERE d.file_id=f.id AND d.day=?)
+                    ORDER BY EXISTS(SELECT 1 FROM daily_tracks d WHERE d.file_id=f.id AND d.day>=?),
+                    random() LIMIT ?''', (day, cutoff, self.daily_size-count)).fetchall()
                 db.executemany('INSERT OR IGNORE INTO daily_tracks VALUES (?,?)', ((day, r['id']) for r in rows))
                 count += len(rows)
             if count == self.daily_size:
                 db.execute("INSERT OR REPLACE INTO meta VALUES ('daily_active',?)", (json.dumps(day),))
             db.execute('DELETE FROM daily_tracks WHERE day<?', ((datetime.date.fromisoformat(day)-datetime.timedelta(days=30)).isoformat(),))
-            db.execute('DELETE FROM cache_attempts WHERE retry_at<?', (time.time()-7*86400,))
         return count
 
     def daily(self, size, params):
         day = cache_day()
+        self.fill_daily(day)
         with self.catalog.connect() as db:
             row = db.execute("SELECT value FROM meta WHERE key='daily_active'").fetchone()
             active = json.loads(row['value']) if row else day
@@ -113,37 +114,43 @@ class Prefetch:
         if now >= self.next_reconcile:
             if not self.media.reconcile_one():
                 self.next_reconcile = now+1800
-        count = self.fill_daily(day)
         with self.catalog.connect() as db:
             row = db.execute("SELECT value FROM meta WHERE key='prefetch'").fetchone()
             state = json.loads(row['value']) if row else {}
-        if state.get('day')!=day: state = {'day':day,'extra':0}
+        state['day'] = day
+        state.pop('extra', None)
+        state.pop('ready', None)
         hour = int(now//3600)
-        if state.get('hour')!=hour: state.update(hour=hour,attempts=0)
-        local_hour = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).hour
-        extra = count >= self.daily_size
-        if state['attempts'] >= 80 or (extra and (not 3 <= local_hour < 6 or state['extra']>=self.extra_limit)):
+        if state.get('hour')!=hour: state.update(hour=hour,attempts=0,downloaded=0)
+        if now < state.get('next_download',0):
             return
         with self.catalog.connect() as db:
             # A disk-backed random sort, not an in-memory all-song queue.
+            db.execute('DELETE FROM cache_attempts WHERE retry_at<?', (now-7*86400,))
             row = db.execute('''SELECT s.id FROM songs s
                 LEFT JOIN audio_aliases a ON a.song_id=s.id
                 LEFT JOIN cache_attempts c ON c.song_id=s.id
                 WHERE s.status='accepted' AND a.song_id IS NULL AND coalesce(c.retry_at,0)<=?
                 AND coalesce(json_extract((SELECT value FROM meta WHERE key='source_backoff'),'$.'||json_extract(s.data,'$.source')),0)<=?
-                AND (?=0 OR s.id IN (SELECT m.value FROM boards b,json_each(b.members) m))
-                ORDER BY random() LIMIT 1''', (now, now, int(extra))).fetchone()
+                ORDER BY CASE WHEN s.id IN
+                    (SELECT m.value FROM boards b,json_each(b.members) m) THEN 0 ELSE 1 END,
+                    random() LIMIT 1''', (now, now)).fetchone()
         if row is None: return
         state['attempts'] += 1
+        state['next_download'] = now+self.download_interval
+        state['interval'] = self.download_interval
         self.catalog.set_meta('prefetch',state)
         file_id = self.download(row['id'])
         if file_id:
-            if extra: state['extra'] += 1
-            else:
-                with self.catalog.connect() as db:
-                    db.execute('INSERT OR IGNORE INTO daily_tracks VALUES (?,?)', (day,file_id))
-                count = self.fill_daily(day)
-        state.update(ready=count,cache=self.media.summary(),memory=memory_snapshot(),updated=now)
+            with self.catalog.connect() as db:
+                added = db.execute('SELECT added FROM audio_files WHERE id=?',(file_id,)).fetchone()
+            # Count new audio files, not aliases or recovered old files.
+            if added and added['added'] >= now:
+                completed_hour = int(time.time()//3600)
+                if completed_hour != state['hour']:
+                    state.update(hour=completed_hour,attempts=0,downloaded=0)
+                state['downloaded'] = state.get('downloaded',0)+1
+        state.update(cache=self.media.summary(),memory=memory_snapshot(),updated=now)
         self.catalog.set_meta('prefetch', state)
 
     def loop(self, stop):

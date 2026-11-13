@@ -39,7 +39,7 @@ def song_entry(row):
             'bitRate': int(media.get('bitrate') or 128),
             'genre': NAMES[source], 'type': 'music', 'isVideo': False,
             'path': f'{NAMES[source]}/{artist}/{album}/{record["title"]}.{suffix}',
-            'created': row['checked'], 'playCount': row['play_count'] or 0,
+            'created': row['checked'] or '1970-01-01T00:00:00Z', 'playCount': row['play_count'] or 0,
             'userRating': row['rating'] or 0}
     if row['starred']:
         song['starred'] = row['starred']
@@ -60,13 +60,13 @@ class Library:
             self.albums.setdefault(album_id, {'id': album_id, 'parent': artist_id, 'isDir': True,
                 'name': album, 'title': album, 'artist': artist, 'artistId': artist_id,
                 'coverArt': album_id, 'songCount': 0, 'duration': 0, 'genre': NAMES[source],
-                'created': row['checked'], 'playCount': 0, '_source': source, '_songs': []})
+                'created': song['created'], 'playCount': 0, '_source': source, '_songs': []})
             entry = self.albums[album_id]
             entry['_songs'].append(song['id'])
             entry['songCount'] += 1
             entry['duration'] += song['duration']
             entry['playCount'] += song['playCount']
-            entry['created'] = max(entry['created'], row['checked'])
+            entry['created'] = max(entry['created'], song['created'])
             self.artists.setdefault(artist_id, {'id': artist_id, 'name': artist, 'coverArt': artist_id,
                                               'albumCount': 0, '_albums': set(), '_source': source})
             self.artists[artist_id]['_albums'].add(album_id)

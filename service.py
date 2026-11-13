@@ -193,7 +193,7 @@ class App(ThreadingHTTPServer):
         if endpoint == 'getSong' and params['id'].startswith('cache-'):
             return {'song': self.media.entry(params['id'][6:])}
         if endpoint == 'getPlaylists':
-            return {'playlists': {'playlist': list(self.catalog.playlist_headers(self.account['username'])) + [self.media.playlist(self.account['username'])]}}
+            return {'playlists': {'playlist': [self.media.playlist(self.account['username'])] + list(self.catalog.playlist_headers(self.account['username']))}}
         if endpoint == 'getPlaylist':
             if params['id'] == CACHE_PLAYLIST:
                 return {'playlist': self.media.playlist(self.account['username'], entries=True)}

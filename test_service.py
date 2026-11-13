@@ -135,7 +135,7 @@ class ProtocolTests(HTTPFixture):
         self.assertEqual(self.api('search3', {'query': '*', 'songCount': 10000})['error']['code'], 10)
 
     def test_playlists_preserve_rank_and_hide_paid(self):
-        playlist = self.api('getPlaylists')['playlists']['playlist'][0]
+        playlist = next(p for p in self.api('getPlaylists')['playlists']['playlist'] if p['id']=='netease-hot')
         self.assertEqual(playlist['songCount'], 2)
         entries = self.api('getPlaylist', {'id': playlist['id']})['playlist']['entry']
         self.assertEqual([s['id'] for s in entries], self.ids)

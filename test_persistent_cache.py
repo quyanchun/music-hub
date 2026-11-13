@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import threading
 import time
+import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, patch
 
 from catalog import Catalog
@@ -28,7 +29,7 @@ class PersistentCacheTests(HTTPFixture):
         self.cached(self.ids[0])
         with patch('media.resolve',side_effect=AssertionError('network')):
             lists=self.api('getPlaylists')['playlists']['playlist']
-            self.assertIn(CACHE_PLAYLIST,[p['id'] for p in lists])
+            self.assertEqual(lists[0]['id'],CACHE_PLAYLIST)
             playlist=self.api('getPlaylist',{'id':CACHE_PLAYLIST})['playlist']
             self.assertEqual((playlist['songCount'],len(playlist['entry'])),(1,1))
             key=playlist['entry'][0]['id']
@@ -81,10 +82,12 @@ class PersistentCacheTests(HTTPFixture):
         reopened=Catalog(self.state.name);media=MediaCache(reopened)
         with patch('media.resolve',side_effect=AssertionError('network')):
             self.assertTrue(media.prepare(self.ids[0],local_only=True).exists())
-        with reopened.connect() as db: db.execute("UPDATE songs SET status='unavailable' WHERE id=?",(self.ids[0],))
+        with reopened.connect() as db: db.execute("UPDATE songs SET status='unavailable',checked=NULL WHERE id=?",(self.ids[0],))
         self.assertEqual(media.entry(self.ids[0])['id'],'cache-'+self.ids[0])
+        self.assertEqual(self.api('getArtists')['status'],'ok')
+        self.assertEqual(self.api('getAlbumList2',{'type':'newest'})['status'],'ok')
 
-    def test_daily_fifty_stable_across_restart_and_previous_batch_on_outage(self):
+    def test_daily_fifty_stable_across_restart_and_cache_only_on_outage(self):
         for n in range(55):
             key=insert(self.app.catalog,record('daily-'+str(n)))
             self.cached(key)
@@ -94,8 +97,12 @@ class PersistentCacheTests(HTTPFixture):
         self.assertTrue(all(s['id'].startswith('cache-') for s in first))
         reopened=Prefetch(self.app.catalog,self.app.media,self.app.search)
         self.assertEqual([s['id'] for s in first],[s['id'] for s in reopened.daily(50,{})])
-        with patch('prefetch.cache_day',return_value='2099-01-01'):
-            self.assertEqual([s['id'] for s in first],[s['id'] for s in reopened.daily(50,{})])
+        with patch('prefetch.cache_day',return_value='2099-01-01'),patch.object(self.app.media,'prepare',side_effect=AssertionError('recommendations must not download')),patch.object(self.app.search,'search',side_effect=AssertionError('recommendations must not search')):
+            next_day=reopened.daily(50,{})
+            self.assertEqual(len(next_day),50)
+            self.assertTrue(all(s['id'].startswith('cache-') for s in next_day))
+            self.assertEqual([s['id'] for s in next_day],[s['id'] for s in reopened.daily(50,{})])
+            self.assertEqual(self.app.media.summary()['count'],55)
         self.assertEqual(reopened.daily(0,{}),[])
 
     def test_background_pauses_for_memory_and_player_without_network(self):
@@ -195,12 +202,84 @@ class PersistentCacheTests(HTTPFixture):
                 self.assertTrue(future.result(5).exists())
         self.assertEqual(self.app.media.reserved,0)
 
-    def test_hourly_retry_budget_survives_worker_restart(self):
+    def test_download_schedule_survives_worker_restart(self):
         day=cache_day()
-        self.app.catalog.set_meta('prefetch',{'day':day,'extra':0,'hour':int(time.time()//3600),'attempts':80})
+        self.app.catalog.set_meta('prefetch',{'day':day,'hour':int(time.time()//3600),'attempts':1,'next_download':time.time()+180})
         worker=Prefetch(self.app.catalog,self.app.media,self.app.search);worker.next_reconcile=time.time()+60
         with patch('prefetch.background_allowed',return_value=True),patch.object(worker,'download') as download:
             worker.step();download.assert_not_called()
+
+    def test_cache_playlist_is_first_even_empty_in_json_and_xml(self):
+        self.assertEqual(self.api('getPlaylists')['playlists']['playlist'][0]['id'],CACHE_PLAYLIST)
+        _,_,body=self.request('getPlaylists',{'f':'xml'})
+        playlists=ET.fromstring(body).find('{*}playlists')
+        self.assertEqual(playlists[0].attrib['id'],CACHE_PLAYLIST)
+
+    def test_continuous_three_minute_downloads_survive_restart_and_hour_boundary(self):
+        for n in range(25):insert(self.app.catalog,record('paced-'+str(n)))
+        worker=self.app.prefetch
+        start=(int(time.time()//3600)+1)*3600
+        worker.next_reconcile=start+7200
+        clock=[start]
+        def download(key):return self.cached(key).stem
+        with patch('prefetch.time.time',side_effect=lambda:clock[0]),patch('prefetch.background_allowed',return_value=True),patch.object(worker,'download',side_effect=download) as network:
+            for n in range(20):
+                clock[0]=start+n*180
+                worker.step()
+                self.assertEqual(network.call_count,n+1)
+                clock[0]+=1
+                worker.step()  # No burst while waiting for the next download slot.
+                self.assertEqual(network.call_count,n+1)
+            self.assertEqual(self.app.media.summary()['count'],20)
+            reopened=Prefetch(self.app.catalog,self.app.media,self.app.search)
+            reopened.next_reconcile=start+7200
+            with patch.object(reopened,'download',side_effect=download) as resumed:
+                clock[0]=start+3599
+                reopened.step();resumed.assert_not_called()
+                clock[0]=start+3600
+                reopened.step();resumed.assert_called_once()
+            self.assertEqual(self.app.media.summary()['count'],21)
+
+    def test_failures_and_duplicates_keep_three_minute_cadence_without_counting_success(self):
+        worker=self.app.prefetch
+        start=(int(time.time()//3600)+1)*3600
+        clock=[start]
+        self.cached(self.ids[0],age=100)
+        worker.next_reconcile=start+7200
+        def duplicate(key):
+            self.app.media.bind(key,self.ids[0]);return self.ids[0]
+        with patch('prefetch.time.time',side_effect=lambda:clock[0]),patch('prefetch.background_allowed',return_value=True):
+            with patch.object(worker,'download',return_value=None) as failed:
+                worker.step();failed.assert_called_once()
+            clock[0]+=10
+            with patch.object(worker,'download') as early:
+                worker.step();early.assert_not_called()
+            clock[0]=start+180
+            with patch.object(worker,'download',side_effect=duplicate) as aliased:
+                worker.step();aliased.assert_called_once()
+            insert(self.app.catalog,record('new-after-duplicate'))
+            clock[0]=start+360
+            with patch.object(worker,'download',side_effect=lambda key:self.cached(key).stem) as new:
+                worker.step();new.assert_called_once()
+        with self.app.catalog.connect() as db:
+            state=json.loads(db.execute("SELECT value FROM meta WHERE key='prefetch'").fetchone()[0])
+        self.assertEqual(state['downloaded'],1)
+
+    def test_download_worker_does_not_generate_or_depend_on_recommendations(self):
+        self.app.prefetch.next_reconcile=time.time()+600
+        with patch('prefetch.background_allowed',return_value=True),patch.object(self.app.prefetch,'fill_daily',side_effect=AssertionError('independent recommendation logic')),patch.object(self.app.prefetch,'download',return_value=None) as network:
+            self.app.prefetch.step();network.assert_called_once()
+
+    def test_daytime_prefetch_continues_after_daily_and_cached_playlists(self):
+        for key in self.ids:self.cached(key)
+        for n in range(50):self.cached(insert(self.app.catalog,record('full-'+str(n))))
+        self.app.prefetch.fill_daily(cache_day())
+        new=insert(self.app.catalog,record('outside-cached-playlists'))
+        self.app.prefetch.next_reconcile=time.time()+7200
+        # 12:00 China time: the old night-only policy stopped here.
+        noon=(int(time.time()//86400)*86400)+4*3600
+        with patch('prefetch.time.time',return_value=noon),patch('prefetch.background_allowed',return_value=True),patch.object(self.app.prefetch,'download',return_value=None) as network:
+            self.app.prefetch.step();network.assert_called_once_with(new)
 
     def test_stale_database_row_does_not_create_phantom_capacity(self):
         for path in self.app.media.folder.iterdir(): path.unlink()
