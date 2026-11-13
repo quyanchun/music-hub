@@ -64,10 +64,12 @@ class OnlineSearch:
             row = db.execute('SELECT ids FROM searches WHERE key=? AND expires>?', (key, time.time())).fetchone()
         return json.loads(row['ids']) if row else None
 
-    def search(self, query, folder=None):
+    def search(self, query, folder=None, *, sources=None):
         source = FOLDERS.get(str(folder))
         canonical = ' '.join(unicodedata.normalize('NFKC', query).casefold().split())
-        key = hashlib.sha256((str(source) + '\0' + canonical).encode()).hexdigest()
+        allowed = None if sources is None else tuple(name for name in NAMES if name in sources)
+        scope = '' if allowed is None else '\0auto:'+','.join(allowed)
+        key = hashlib.sha256((str(source) + '\0' + canonical + scope).encode()).hexdigest()
         cached = self.cached(key)
         if cached is not None:
             return self.merge(query, source, cached)
@@ -77,7 +79,7 @@ class OnlineSearch:
                 # Do not queue unbounded searches if clients search as they type.
                 if len(self.flights) >= 2:
                     return self.local(query, source)
-                future = self.queries.submit(self.run, key, query, source)
+                future = self.queries.submit(self.run, key, query, source, allowed)
                 self.flights[key] = future
                 future.add_done_callback(lambda done: self.finished(key, done))
         try:
@@ -134,9 +136,10 @@ class OnlineSearch:
                 return song, media
         return song, probe(song, verify_duration=True)
 
-    def run(self, key, query, source):
+    def run(self, key, query, source, allowed=None):
         deadline = time.monotonic() + SEARCH_SECONDS
         sources = [source] if source else list(NAMES)
+        if allowed is not None: sources = [name for name in sources if name in allowed]
         futures = {self.workers.submit(source_search, name, query): name for name in sources}
         done, pending = wait(futures, timeout=min(10, max(0, deadline - time.monotonic())))
         for future in pending:

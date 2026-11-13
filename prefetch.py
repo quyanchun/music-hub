@@ -60,25 +60,64 @@ class Prefetch:
         with self.catalog.connect() as db:
             row = db.execute('SELECT failures FROM cache_attempts WHERE song_id=?', (key,)).fetchone()
             failures = (row['failures'] if row else 0) + 1
-            status = getattr(getattr(error,'response',None),'status_code',None)
-            if status in (403,429) or '频繁' in str(error):
-                source = db.execute("SELECT json_extract(data,'$.source') FROM songs WHERE id=?",(key,)).fetchone()
-                previous = db.execute("SELECT value FROM meta WHERE key='source_backoff'").fetchone()
-                cooldown = json.loads(previous['value']) if previous else {}
-                if source:
-                    cooldown[source[0]] = time.time()+1800
-                    db.execute("INSERT OR REPLACE INTO meta VALUES ('source_backoff',?)",(json.dumps(cooldown),))
+            source = db.execute("SELECT json_extract(data,'$.source') FROM songs WHERE id=?",(key,)).fetchone()
             db.execute('INSERT OR REPLACE INTO cache_attempts VALUES (?,?,?)',
                        (key, time.time()+min(6*3600, 1800*2**min(failures-1,4)), failures))
+        if source: self.source_result(source[0], error or ValueError('download_failed'))
+
+    def available_sources(self):
+        with self.catalog.connect() as db:
+            row = db.execute("SELECT value FROM meta WHERE key='source_backoff'").fetchone()
+        cooldown = json.loads(row['value']) if row else {}
+        return [source for source in NAMES if cooldown.get(source,0)<=time.time()]
+
+    def source_result(self, source, error=None):
+        now = time.time()
+        with self.catalog.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute("SELECT value FROM meta WHERE key='download_source_health'").fetchone()
+            health = json.loads(row['value']) if row else {}
+            row = db.execute("SELECT value FROM meta WHERE key='source_backoff'").fetchone()
+            cooldown = json.loads(row['value']) if row else {}
+            state = health.get(source, {})
+            if state.get('blocked_until') and state['blocked_until']<=now: state = {}
+            if error is None:
+                state = {'failures':0,'blocked_until':0,'last_error':None}
+                cooldown.pop(source,None)
+            else:
+                status = getattr(getattr(error,'response',None),'status_code',None)
+                limited = status in (403,429) or '频繁' in str(error)
+                state.update(failures=state.get('failures',0)+1,last_error='rate_limited' if limited else type(error).__name__)
+                if limited: cooldown[source] = now+1800
+                if state['failures']>=3:
+                    china = datetime.timezone(datetime.timedelta(hours=8))
+                    tomorrow = datetime.datetime.fromtimestamp(now,china).date()+datetime.timedelta(days=1)
+                    state['blocked_until'] = datetime.datetime.combine(tomorrow,datetime.time(),china).timestamp()
+                    cooldown[source] = max(cooldown.get(source,0),state['blocked_until'])
+            state['updated'] = now
+            health[source] = state
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('download_source_health',?)",(json.dumps(health),))
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('source_backoff',?)",(json.dumps(cooldown),))
+
+    def fetch(self, key, record):
+        if record['source'] not in self.available_sources(): raise BackgroundPaused('自动下载音源已暂停')
+        already_cached = self.media.cached(key, verified=True) or self.media.equivalent(record)
+        try:
+            path = self.media.prepare(key, background=True)
+        except (PermissionError,FileNotFoundError) as error:
+            raise BackgroundPaused('等待本地缓存目录恢复') from error
+        except ValueError as error:
+            if '磁盘剩余空间不足' in str(error): raise BackgroundPaused('等待磁盘空间') from error
+            raise
+        hit = self.media.cached(path.stem, verified=True)
+        if not hit: raise BackgroundPaused('等待已有文件完整校验')
+        if not already_cached: self.source_result(record['source'])
+        return hit[0]['id']
 
     def download(self, key):
         original = self.catalog.song(key)
         try:
-            path = self.media.prepare(key, background=True)
-            hit = self.media.cached(path.stem, verified=True)
-            if hit: return hit[0]['id']
-            # Old files are verified one at a time by reconciliation.
-            raise BackgroundPaused('等待已有文件完整校验')
+            return self.fetch(key,original)
         except BackgroundPaused:
             raise
         except Exception as error:
@@ -89,7 +128,9 @@ class Prefetch:
         for remote in (False, True):
             if remote:
                 if self.media.players or not background_allowed(): raise BackgroundPaused('等待搜索预算')
-                alternatives = self.search.search((original['title']+' '+original.get('singer','')).strip())[:64]
+                sources = self.available_sources()
+                if not sources: return None
+                alternatives = self.search.search((original['title']+' '+original.get('singer','')).strip(),sources=sources)[:64]
             for alternate in alternatives:
                 if alternate == key: continue
                 try:
@@ -99,11 +140,9 @@ class Prefetch:
                         retry = db.execute('SELECT 1 FROM cache_attempts WHERE song_id=? AND retry_at>?', (alternate,time.time())).fetchone()
                         cooldown = db.execute("SELECT coalesce(json_extract(value,?),0) FROM meta WHERE key='source_backoff'",('$.'+record['source'],)).fetchone()
                     if retry or (cooldown and cooldown[0]>time.time()): continue
-                    path = self.media.prepare(alternate, background=True)
-                    hit = self.media.cached(path.stem, verified=True)
-                    if hit:
-                        self.media.bind(key, hit[0]['id'])
-                        return hit[0]['id']
+                    file_id = self.fetch(alternate,record)
+                    self.media.bind(key, file_id)
+                    return file_id
                 except BackgroundPaused: raise
                 except Exception as error: self.retry(alternate,error)
         return None
