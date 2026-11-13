@@ -1,0 +1,296 @@
+{
+  "date": "2026-11-13",
+  "purpose": "GitHub-discovered source qualification, isolated from the deployed service",
+  "nominal_container_memory_limit": 180000000,
+  "qualified_sources": [
+    {
+      "source": "bilibili_au",
+      "local": {
+        "source": "bilibili_au",
+        "checked_utc": "2026-11-13T09:43:58.850466+00:00",
+        "upstream": [
+          "https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/bilibili.py",
+          "https://github.com/listen1/listen1_chrome_extension/blob/master/js/provider/bilibili.js"
+        ],
+        "tracks": [
+          {
+            "id": 1003142,
+            "title": "【tsukimi】YELLOW / 神山羊",
+            "artist": "tsukimi",
+            "audio_host": "upos-sz-mirrorcos.bilivideo.com",
+            "bytes": 4428595,
+            "http_content_length": 4428595,
+            "api_size_field": 4428595,
+            "api_size_matches_file": true,
+            "sha256": "3d8f95758f1024e650fb9d8f97b2cfff109f7e39dc2dadf09e3fd0102a2c006d",
+            "md5": "b96c2899e29b304e142d109bbdac3146",
+            "duration": 183.0,
+            "declared_duration": 183,
+            "codecs": [
+              "aac"
+            ],
+            "full_decode": true,
+            "path": "bilibili-au-1003142.m4a"
+          },
+          {
+            "id": 2445151,
+            "title": "【洛天依原创】双星伴生",
+            "artist": "洛天依 · 言和 · JUSF周存",
+            "audio_host": "upos-sz-mirrorcos.bilivideo.com",
+            "bytes": 4768839,
+            "http_content_length": 4768839,
+            "api_size_field": 168,
+            "api_size_matches_file": false,
+            "sha256": "4ab4404faf03ca68bbd19041d1fe9460370d24ad7e77207c582f5cacb5fe2636",
+            "md5": "68604186abe18c8523771300d0e2bf2e",
+            "duration": 197.198005,
+            "declared_duration": 197,
+            "codecs": [
+              "aac"
+            ],
+            "full_decode": true,
+            "path": "bilibili-au-2445151.m4a"
+          }
+        ],
+        "qualified": true,
+        "catalog": {
+          "playlist_id": 10624,
+          "count": 16,
+          "sample_ids": [
+            2478206,
+            2445151,
+            2435107,
+            2444395,
+            2446567
+          ]
+        },
+        "stage": "audio verification 2445151",
+        "negative_control": {
+          "code": 4511001,
+          "has_audio": false
+        },
+        "memory": {},
+        "memory_peaks": {
+          "working": 0,
+          "charged": 0
+        }
+      },
+      "server": {
+        "source": "bilibili_au",
+        "checked_utc": "2026-11-13T09:43:59.793805+00:00",
+        "upstream": [
+          "https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/bilibili.py",
+          "https://github.com/listen1/listen1_chrome_extension/blob/master/js/provider/bilibili.js"
+        ],
+        "tracks": [
+          {
+            "id": 1003142,
+            "title": "【tsukimi】YELLOW / 神山羊",
+            "artist": "tsukimi",
+            "audio_host": "upos-sz-mirrorcos.bilivideo.com",
+            "bytes": 4428595,
+            "http_content_length": 4428595,
+            "api_size_field": 4428595,
+            "api_size_matches_file": true,
+            "sha256": "3d8f95758f1024e650fb9d8f97b2cfff109f7e39dc2dadf09e3fd0102a2c006d",
+            "md5": "b96c2899e29b304e142d109bbdac3146",
+            "duration": 183.043,
+            "declared_duration": 183,
+            "codecs": [
+              "aac"
+            ],
+            "full_decode": true,
+            "path": "bilibili-au-1003142.m4a"
+          },
+          {
+            "id": 2445151,
+            "title": "【洛天依原创】双星伴生",
+            "artist": "洛天依 · 言和 · JUSF周存",
+            "audio_host": "upos-sz-mirrorcos.bilivideo.com",
+            "bytes": 4768839,
+            "http_content_length": 4768839,
+            "api_size_field": 168,
+            "api_size_matches_file": false,
+            "sha256": "4ab4404faf03ca68bbd19041d1fe9460370d24ad7e77207c582f5cacb5fe2636",
+            "md5": "68604186abe18c8523771300d0e2bf2e",
+            "duration": 197.245,
+            "declared_duration": 197,
+            "codecs": [
+              "aac"
+            ],
+            "full_decode": true,
+            "path": "bilibili-au-2445151.m4a"
+          }
+        ],
+        "qualified": true,
+        "catalog": {
+          "playlist_id": 10624,
+          "count": 16,
+          "sample_ids": [
+            2478206,
+            2445151,
+            2435107,
+            2444395,
+            2446567
+          ]
+        },
+        "stage": "audio verification 2445151",
+        "negative_control": {
+          "code": 4511001,
+          "has_audio": false
+        },
+        "memory": {
+          "limit": 179998720,
+          "charged": 55726080,
+          "working": 52006912
+        },
+        "memory_peaks": {
+          "working": 63107072,
+          "charged": 66826240
+        }
+      },
+      "matching_payload_hashes": true
+    },
+    {
+      "source": "streetvoice_cn",
+      "local": {
+        "source": "streetvoice_cn",
+        "checked_utc": "2026-11-13T10:01:56.024519+00:00",
+        "scope": "public full playback; original-file download permission is not assumed",
+        "upstream": "https://github.com/CharlesPikachu/musicdl/blob/master/musicdl/modules/sources/streetvoice.py",
+        "tracks": [
+          {
+            "id": 579807,
+            "title": "流浪",
+            "artist": "贝克小姐Miss Bac.",
+            "declared_duration": 245,
+            "playlist_duration": 245.080809,
+            "duration": 245.106939,
+            "segments": 25,
+            "source_bytes": 3313876,
+            "source_sha256": "d334c299e244844c355fa48ffef9173d89379ca00fb46659fd823cdde5e1629b",
+            "file_bytes": 2941641,
+            "full_decode": true,
+            "audio_only": true,
+            "path": "streetvoice-579807.mp3"
+          },
+          {
+            "id": 830458,
+            "title": "流浪台北",
+            "artist": "白天陈星甫医师 x 晚上创作歌手",
+            "declared_duration": 252,
+            "playlist_duration": 252.07304599999998,
+            "duration": 252.081633,
+            "segments": 26,
+            "source_bytes": 3240368,
+            "source_sha256": "7fedfa9f8d916f0eb8b37c8f16ab28d5ea6ca76c804d28b8e39c3c5f21c0eb56",
+            "file_bytes": 3025338,
+            "full_decode": true,
+            "audio_only": true,
+            "path": "streetvoice-830458.mp3"
+          }
+        ],
+        "qualified": true,
+        "stage": "invalid ID",
+        "search": {
+          "keyword": "流浪",
+          "ids": [
+            579807,
+            830458,
+            123688,
+            597676,
+            368632,
+            35454,
+            361330,
+            131745,
+            655205,
+            133678
+          ]
+        },
+        "negative_control": {
+          "http": 404
+        },
+        "memory": {},
+        "memory_peaks": {
+          "working": 0,
+          "charged": 0
+        }
+      },
+      "server": {
+        "source": "streetvoice_cn",
+        "checked_utc": "2026-11-13T10:01:57.014110+00:00",
+        "scope": "public full playback; original-file download permission is not assumed",
+        "upstream": "https://github.com/CharlesPikachu/musicdl/blob/master/musicdl/modules/sources/streetvoice.py",
+        "tracks": [
+          {
+            "id": 579807,
+            "title": "流浪",
+            "artist": "贝克小姐Miss Bac.",
+            "declared_duration": 245,
+            "playlist_duration": 245.080809,
+            "duration": 245.106939,
+            "segments": 25,
+            "source_bytes": 3313876,
+            "source_sha256": "d334c299e244844c355fa48ffef9173d89379ca00fb46659fd823cdde5e1629b",
+            "file_bytes": 2941641,
+            "full_decode": true,
+            "audio_only": true,
+            "path": "streetvoice-579807.mp3"
+          },
+          {
+            "id": 830458,
+            "title": "流浪台北",
+            "artist": "白天陈星甫医师 x 晚上创作歌手",
+            "declared_duration": 252,
+            "playlist_duration": 252.07304599999998,
+            "duration": 252.081633,
+            "segments": 26,
+            "source_bytes": 3240368,
+            "source_sha256": "7fedfa9f8d916f0eb8b37c8f16ab28d5ea6ca76c804d28b8e39c3c5f21c0eb56",
+            "file_bytes": 3025338,
+            "full_decode": true,
+            "audio_only": true,
+            "path": "streetvoice-830458.mp3"
+          }
+        ],
+        "qualified": true,
+        "stage": "invalid ID",
+        "search": {
+          "keyword": "流浪",
+          "ids": [
+            579807,
+            830458,
+            123688,
+            597676,
+            368632,
+            35454,
+            361330,
+            131745,
+            655205,
+            133678
+          ]
+        },
+        "negative_control": {
+          "http": 404
+        },
+        "memory": {
+          "limit": 179998720,
+          "charged": 64827392,
+          "working": 54681600
+        },
+        "memory_peaks": {
+          "working": 64860160,
+          "charged": 75358208
+        }
+      },
+      "matching_payload_hashes": true
+    }
+  ],
+  "other_candidates": {
+    "ccmixter": "One complete 280-second CC-BY MP3 decoded in both environments with matching provider checksum; dual-track qualification incomplete; slow transfer.",
+    "audius": "Search works in both environments; sampled tracks did not meet ungated-download permission checks; not qualified for offline caching.",
+    "jamendo": "Web endpoint returned HTTP 403; official API requires a developer client ID; not qualified.",
+    "internetarchive": "Connection failed in both environments; not qualified.",
+    "bilibili_video": "Video-info and audio-keyword search requests returned HTTP 412; AU qualification does not cover these endpoints."
+  }
+}
