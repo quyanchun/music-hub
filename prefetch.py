@@ -57,6 +57,7 @@ class Prefetch:
         return songs[:size]
 
     def retry(self, key, error=None):
+        self.catalog.exclude(key, 'audio_download_failed')
         with self.catalog.connect() as db:
             row = db.execute('SELECT failures FROM cache_attempts WHERE song_id=?', (key,)).fetchone()
             failures = (row['failures'] if row else 0) + 1
@@ -115,7 +116,7 @@ class Prefetch:
         return hit[0]['id']
 
     def download(self, key):
-        original = self.catalog.song(key)
+        original = self.catalog.song(key, allow_unavailable=True)
         try:
             return self.fetch(key,original)
         except BackgroundPaused:
@@ -169,10 +170,13 @@ class Prefetch:
             row = db.execute('''SELECT s.id FROM songs s
                 LEFT JOIN audio_aliases a ON a.song_id=s.id
                 LEFT JOIN cache_attempts c ON c.song_id=s.id
-                WHERE s.status='accepted' AND a.song_id IS NULL AND coalesce(c.retry_at,0)<=?
+                WHERE (s.status='accepted' OR (s.status IN ('pending','unavailable') AND s.id IN
+                    (SELECT m.value FROM boards b,json_each(b.members) m)))
+                AND a.song_id IS NULL AND coalesce(c.retry_at,0)<=?
                 AND coalesce(json_extract((SELECT value FROM meta WHERE key='source_backoff'),'$.'||json_extract(s.data,'$.source')),0)<=?
                 ORDER BY CASE WHEN s.id IN
-                    (SELECT m.value FROM boards b,json_each(b.members) m) THEN 0 ELSE 1 END,
+                    (SELECT m.value FROM boards b,json_each(b.members) m WHERE b.id LIKE 'pl-%') THEN 0
+                    WHEN s.id IN (SELECT m.value FROM boards b,json_each(b.members) m) THEN 1 ELSE 2 END,
                     random() LIMIT 1''', (now, now)).fetchone()
         if row is None: return
         state['attempts'] += 1

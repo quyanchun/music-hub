@@ -38,6 +38,9 @@ def collection(source, identifier, name, count=0):
 
 
 def list_playlists(source):
+    if source == 'bilibili':
+        import bilibili
+        return bilibili.list_playlists()
     if source == 'netease':
         body = fetch('https://music.163.com/api/playlist/list',
                      {'cat': '全部', 'order': 'hot', 'limit': 12, 'offset': 0})
@@ -87,6 +90,9 @@ def song(source, key, title, singer, album, duration, free=True):
 
 
 def playlist_tracks(source, key, offset, limit=30):
+    if source == 'bilibili':
+        import bilibili
+        return bilibili.playlist_tracks(key, offset, limit)
     limited = False
     if source == 'netease':
         body = fetch('https://music.163.com/api/playlist/detail', {'id': key})

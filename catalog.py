@@ -100,6 +100,7 @@ class Catalog:
 
     def visibility(self, alias='songs'):
         condition = f"{alias}.status='accepted'"
+        condition += f" OR ({alias}.status='pending' AND {alias}.id IN (SELECT m.value FROM boards b,json_each(b.members) m))"
         if self.has_audio:
             condition += f' OR EXISTS(SELECT 1 FROM audio_aliases ca JOIN audio_files cf ON cf.id=ca.file_id WHERE ca.song_id={alias}.id)'
         return '(' + condition + ')'
@@ -122,18 +123,18 @@ class Catalog:
 
     def playlist_rows(self, key):
         with self.connect() as db:
-            query = "SELECT s.id,s.data,s.media,s.checked,a.starred,a.rating,a.play_count,a.last_played FROM boards b,json_each(b.members) m JOIN songs s ON s.id=m.value LEFT JOIN annotations a ON a.id=s.id WHERE b.id=? AND " + self.visibility('s') + " ORDER BY cast(m.key AS INTEGER)"
+            query = "SELECT s.id,s.data,s.media,s.checked,a.starred,a.rating,a.play_count,a.last_played,f.id AS cache_file FROM boards b,json_each(b.members) m JOIN songs s ON s.id=m.value LEFT JOIN annotations a ON a.id=s.id LEFT JOIN audio_aliases ca ON ca.song_id=s.id LEFT JOIN audio_files f ON f.id=ca.file_id AND f.verified=1 WHERE b.id=? AND (s.status IN ('accepted','pending') OR f.id IS NOT NULL) ORDER BY cast(m.key AS INTEGER)"
             for row in db.execute(query, (key,)):
-                yield self.view_row(row)
+                yield {**self.view_row(row), 'cache_file': row['cache_file']}
 
     def playlist_headers(self, username):
         with self.connect() as db:
             for board in db.execute('SELECT id,name,total,updated FROM boards ORDER BY id'):
-                row = db.execute("SELECT count(*) AS count,coalesce(sum(json_extract(s.media,'$.duration')),0) AS duration FROM boards b,json_each(b.members) m JOIN songs s ON s.id=m.value WHERE b.id=? AND " + self.visibility('s'), (board['id'],)).fetchone()
-                if board['id'].startswith('pl-') and not row['count']: continue
+                row = db.execute("SELECT count(*) AS count,count(f.id) AS cached,coalesce(sum(json_extract(s.media,'$.duration')),0) AS duration FROM boards b,json_each(b.members) m JOIN songs s ON s.id=m.value LEFT JOIN audio_aliases ca ON ca.song_id=s.id LEFT JOIN audio_files f ON f.id=ca.file_id AND f.verified=1 WHERE b.id=? AND (s.status IN ('accepted','pending') OR f.id IS NOT NULL)", (board['id'],)).fetchone()
+                if not row['count']: continue
                 yield {'id':board['id'],'name':board['name'],'owner':username,'public':False,'songCount':row['count'],
                        'duration':int(row['duration']),'created':board['updated'],'changed':board['updated'],
-                       'comment':f"公开可播曲目；原单 {board['total']} 首"}
+                       'comment':f"已缓存 {row['cached']} 首；其余未确认失败曲目可点播缓存；原单 {board['total']} 首"}
 
     def cover_keys(self, key):
         from resolver import NAMES
@@ -163,10 +164,11 @@ class Catalog:
                         break
             return keys
 
-    def song(self, song_id):
+    def song(self, song_id, allow_unavailable=False):
         song_id = song_id.removeprefix('cache-')
         with self.connect() as db:
-            row = db.execute("SELECT * FROM songs WHERE id=? AND " + self.visibility(), (song_id,)).fetchone()
+            condition = "status!='rejected'" if allow_unavailable else self.visibility()
+            row = db.execute("SELECT * FROM songs WHERE id=? AND (" + condition + ")", (song_id,)).fetchone()
         if not row:
             raise KeyError(song_id)
         self.touch(song_id)
@@ -274,7 +276,7 @@ class Catalog:
                 while True:
                     with self.connect() as db:
                         candidates = [(r['id'], json.loads(r['data'])) for r in db.execute(
-                            "SELECT id,data FROM songs WHERE id>? AND status!='rejected' AND (checked IS NULL OR checked<?) ORDER BY id LIMIT 64", (last, cutoff))]
+                            "SELECT id,data FROM songs WHERE id>? AND status!='rejected' AND reason!='audio_download_failed' AND (checked IS NULL OR checked<?) ORDER BY id LIMIT 64", (last, cutoff))]
                     if not candidates:
                         break
                     last = candidates[-1][0]

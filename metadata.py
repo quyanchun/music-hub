@@ -18,7 +18,7 @@ from storage import MAX_IMAGES, require_space, sweep
 
 TIME_TAG = re.compile(r'\[(\d{1,3}):(\d{1,2}(?:\.\d{1,3})?)\]')
 ALLOWED_HOSTS = ('music.163.com', 'music.126.net', 'kuwo.cn', 'kugou.com',
-                 'qq.com', 'gtimg.cn', 'migu.cn', 'migu.com')
+                 'qq.com', 'gtimg.cn', 'migu.cn', 'migu.com', 'hdslb.com')
 
 
 def allowed_url(url):
@@ -115,6 +115,9 @@ def matching_netease(fetch, record):
 
 def source_metadata(fetch, record):
     source, song_id = record['source'], record['id']
+    if source == 'bilibili':
+        lyric = record.get('lyric_url') or ''
+        return {'lrc': fetch.text(lyric) if lyric else '', 'cover_url': record.get('cover_url') or ''}
     if source == 'netease':
         return netease_metadata(fetch, song_id)
     if source == 'qq':

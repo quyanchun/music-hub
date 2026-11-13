@@ -1,13 +1,12 @@
 """Publish bounded public playlists in the existing Subsonic library, off the request path."""
-from concurrent.futures import ThreadPoolExecutor
-import datetime
 import json
 import threading
 import time
 
 from catalog import identifier, utc
+from memory_budget import background_allowed
 from public_sources import list_playlists, playlist_tracks
-from resolver import NAMES, blocked, probe, seconds
+from resolver import NAMES, blocked, seconds
 from storage import require_space
 
 MAX_TRACKS = 300
@@ -32,23 +31,15 @@ class PublicPlaylists:
             return None
         if seconds(song) <= 0:
             return None
+        # Collect metadata without per-song audio requests. Preserve confirmed
+        # failures across refreshes; untried tracks remain available for playback.
+        require_space(self.catalog.folder)
+        media = {'suffix': 'm4a' if source == 'bilibili' else 'mp3',
+                 'duration': seconds(song), 'size': 0, 'bitrate': 128}
         with self.catalog.connect() as db:
-            row = db.execute('SELECT status,media,checked FROM songs WHERE id=?', (key,)).fetchone()
-        if row and row['checked']:
-            checked = datetime.datetime.fromisoformat(row['checked'].replace('Z', '+00:00')).timestamp()
-            if time.time() - checked < 12 * 3600:
-                return key if row['status'] == 'accepted' else None
-        try:
-            # Match chart admission: real CDN bytes and preview-size checks.
-            # Full duration is still checked before serving the first playback.
-            media = probe(song)
-            require_space(self.catalog.folder)
-            with self.catalog.connect() as db:
-                db.execute("INSERT INTO songs(id,data,status,media,reason,checked,touched) VALUES (?,?,'accepted',?,'',?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,status='accepted',media=excluded.media,reason='',checked=excluded.checked,touched=excluded.touched",
-                           (key, json.dumps(song, ensure_ascii=False), json.dumps(media), utc(), time.time()))
-            return key
-        except Exception:
-            return None
+            db.execute("INSERT INTO songs(id,data,status,media,touched) VALUES (?,?,'pending',?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,touched=excluded.touched,status=CASE WHEN songs.status='rejected' THEN 'pending' ELSE songs.status END",
+                       (key, json.dumps(song, ensure_ascii=False), json.dumps(media), time.time()))
+        return key
 
     def refresh(self, stop=None):
         stop = stop or threading.Event()
@@ -59,6 +50,8 @@ class PublicPlaylists:
             self.catalog.set_meta('public_playlists', state)
             cards = []
             for source in NAMES:
+                while not background_allowed():
+                    if stop.wait(10): return
                 if stop.is_set():
                     return
                 try:
@@ -83,16 +76,18 @@ class PublicPlaylists:
             # Round-robin pages let every platform publish a first batch before
             # expanding large playlists. Browsing never waits for upstream I/O.
             active = cards
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix='playlist-check') as workers:
+            if cards:
                 for offset in range(0, MAX_TRACKS, PAGE_SIZE):
                     following = []
                     for key, card in active:
+                        while not background_allowed():
+                            if stop.wait(10): return
                         if stop.is_set():
                             return
                         source = card['source']
                         try:
                             page = playlist_tracks(source, card['id'], offset, PAGE_SIZE)
-                            members = list(dict.fromkeys(k for k in workers.map(self.admit, page['songs']) if k))
+                            members = list(dict.fromkeys(k for k in map(self.admit, page['songs']) if k))
                             require_space(self.catalog.folder)
                             with self.catalog.connect() as db:
                                 old = db.execute('SELECT members FROM boards WHERE id=?', (key,)).fetchone()
@@ -136,6 +131,8 @@ class PublicPlaylists:
             partial = any(s.get('error') or s.get('failed') for s in state.get('sources', {}).values())
             interval = 900 if partial else REFRESH_SECONDS
             remaining = state.get('finished_epoch', 0) + interval - time.time()
+            if set(NAMES) - set(state.get('sources', {})):
+                remaining = 0  # Discover a newly enabled source on the next start.
             if remaining > 0 and stop.wait(remaining):
                 break
             try:

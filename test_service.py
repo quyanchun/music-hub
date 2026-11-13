@@ -113,7 +113,7 @@ class ProtocolTests(HTTPFixture):
             self.assertNotIn(secret, logs)
 
     def test_browse_objects_and_cover(self):
-        self.assertEqual(len(self.api('getMusicFolders')['musicFolders']['musicFolder']), 5)
+        self.assertEqual(len(self.api('getMusicFolders')['musicFolders']['musicFolder']), 6)
         artists = self.api('getArtists')['artists']['index'][0]['artist']
         artist = self.api('getArtist', {'id': artists[0]['id']})['artist']
         album = self.api('getAlbum', {'id': artist['album'][0]['id']})['album']

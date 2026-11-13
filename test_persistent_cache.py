@@ -270,6 +270,29 @@ class PersistentCacheTests(HTTPFixture):
         with patch('prefetch.background_allowed',return_value=True),patch.object(self.app.prefetch,'fill_daily',side_effect=AssertionError('independent recommendation logic')),patch.object(self.app.prefetch,'download',return_value=None) as network:
             self.app.prefetch.step();network.assert_called_once()
 
+    def test_public_playlist_priority_and_shared_file_skip_background_redownload(self):
+        public = insert(self.app.catalog, record('public-first'), 'pending')
+        other = insert(self.app.catalog, record('outside'))
+        with self.app.catalog.connect() as db:
+            for n in range(2):
+                db.execute('INSERT INTO boards VALUES (?,?,?,?,?,?)',
+                           ('pl-shared-'+str(n), 'netease', '共享歌单', 1, json.dumps([public]), '2026-11-13T00:00:00Z'))
+        worker = self.app.prefetch
+        worker.next_reconcile = time.time() + 3600
+        with patch('prefetch.background_allowed', return_value=True), patch.object(worker, 'download', return_value=None) as download:
+            worker.step()
+            download.assert_called_once_with(public)
+        # A manual playback uses the same cache index as background downloads.
+        self.cached(public)
+        self.app.catalog.set_meta('prefetch', {})
+        with patch('prefetch.background_allowed', return_value=True), patch.object(worker, 'download', return_value=None) as download:
+            worker.step()
+            self.assertIn(download.call_args.args[0], self.ids)
+            self.assertNotEqual(download.call_args.args[0], other)
+        for n in range(2):
+            entry = self.api('getPlaylist', {'id': 'pl-shared-'+str(n)})['playlist']['entry']
+            self.assertEqual([s['id'] for s in entry], ['cache-'+public])
+
     def test_daytime_prefetch_continues_after_daily_and_cached_playlists(self):
         for key in self.ids:self.cached(key)
         for n in range(50):self.cached(insert(self.app.catalog,record('full-'+str(n))))

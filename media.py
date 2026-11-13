@@ -253,7 +253,7 @@ class MediaCache:
         with lock:
             hit = self.cached(song_id)
             if hit: return hit[1]
-            record = self.catalog.song(song_id)
+            record = self.catalog.song(song_id, allow_unavailable=background)
             equivalent = self.equivalent(record)
             if equivalent:
                 self.bind(song_id, equivalent[0]['id'])
@@ -309,6 +309,10 @@ class MediaCache:
                 os.replace(partial, target)
                 with self.guard:
                     return self.register(song_id, record, target, duration, digest.hexdigest())
+            except (requests.RequestException, ValueError, subprocess.SubprocessError) as error:
+                if '磁盘剩余空间不足' not in str(error):
+                    self.catalog.exclude(song_id, 'audio_download_failed')
+                raise
             finally:
                 partial.unlink(missing_ok=True)
                 with self.guard:
@@ -366,11 +370,14 @@ class MediaCache:
         song.update(id='cache-' + file_id, suffix=hit[1].suffix[1:], size=hit[0]['size'], duration=round(hit[0]['duration']))
         return song
 
-    def playlist(self, username, entries=False):
+    def prune_missing(self):
         with self.catalog.connect() as db:
             for row in db.execute('SELECT * FROM audio_files'):
                 try: self.path(row)
                 except KeyError: pass
+
+    def playlist(self, username, entries=False):
+        self.prune_missing()
         summary = self.summary()
         with self.catalog.connect() as db:
             changed = db.execute("SELECT value FROM meta WHERE key='cache_changed'").fetchone()

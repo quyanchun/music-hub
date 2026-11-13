@@ -2,7 +2,8 @@
 import json
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+import hashlib
 
 from catalog import identifier
 from public_sources import playlist_tracks
@@ -49,11 +50,16 @@ class SourcePermissions(unittest.TestCase):
 
 
 class PublicPlaylistTests(HTTPFixture):
+    def cache(self, key):
+        path = self.app.media.folder / (key + '.mp3')
+        path.write_bytes(self.audio + key.encode())
+        return self.app.media.register(key, self.app.catalog.song(key, allow_unavailable=True),
+                                       path, 180, hashlib.sha256(path.read_bytes()).hexdigest())
+
     def refresh(self, listing, pages):
         with patch('public_playlists.NAMES', {'netease': '网易云'}), \
              patch('public_playlists.list_playlists', return_value=listing), \
-             patch('public_playlists.playlist_tracks', side_effect=pages), \
-             patch('public_playlists.probe', return_value={'suffix': 'mp3', 'duration': 180, 'size': 4096000}):
+             patch('public_playlists.playlist_tracks', side_effect=pages):
             self.app.public_playlists.refresh()
 
     def test_playlist_publish_rank_stable_ids_filter_and_no_browsing_network(self):
@@ -107,3 +113,65 @@ class PublicPlaylistTests(HTTPFixture):
         os.utime(target, (time.time() - 90000,) * 2)
         self.app.maintenance.run()
         self.assertTrue(target.exists())
+
+    def test_new_playlist_is_visible_without_network_then_manual_play_is_shared_cache(self):
+        card = {'id': 'new', 'source': 'netease', 'name': '新歌单'}
+        with patch('resolver.probe', side_effect=AssertionError('eager audio request')):
+            self.refresh([card], [{'songs': [record('untried')], 'total': 1, 'has_more': False}])
+        playlist = next(p for p in self.api('getPlaylists')['playlists']['playlist'] if p['id'].startswith('pl-'))
+        entry = self.api('getPlaylist', {'id': playlist['id']})['playlist']['entry'][0]
+        self.assertFalse(entry['id'].startswith('cache-'))
+        self.assertEqual(self.api('getSong', {'id': entry['id']})['song']['title'], entry['title'])
+        response = MagicMock()
+        response.headers = {'Content-Length': '12'}
+        response.__enter__.return_value = response
+        response.iter_content.return_value = [b'ID3abcdefghi']
+        with patch('media.resolve', return_value=('https://music.126.net/audio', {}, 'mp3')), \
+             patch('media.requests.get', return_value=response), \
+             patch('media.inspect_audio', return_value={'format': {'duration': 180}, 'streams': [{'codec_type': 'audio'}]}):
+            self.assertEqual(self.request('stream', {'id': entry['id']})[0], 200)
+        cached = self.api('getPlaylist', {'id': playlist['id']})['playlist']['entry'][0]
+        self.assertEqual(cached['id'], 'cache-' + entry['id'])
+        self.assertEqual(self.app.media.summary()['count'], 1)
+        with patch('media.resolve', side_effect=AssertionError('cached playback went online')):
+            self.assertEqual(self.request('stream', {'id': cached['id']}, {'Range': 'bytes=0-2'})[2], b'ID3')
+            self.assertEqual(self.request('download', {'id': cached['id']}, method='HEAD')[0], 200)
+
+    def test_failed_tracks_hidden_counts_match_and_refresh_does_not_resurrect(self):
+        card = {'id': 'partial', 'source': 'netease', 'name': '部分缓存'}
+        page = {'songs': [record(str(n)) for n in range(100)], 'total': 100, 'has_more': False}
+        self.refresh([card], [page])
+        for n in range(75): self.cache(identifier('netease', str(n)))
+        for n in range(75, 100): self.app.prefetch.retry(identifier('netease', str(n)), ValueError('failed'))
+        self.refresh([card], [page])
+        public = next(p for p in self.api('getPlaylists')['playlists']['playlist'] if p['id'].startswith('pl-'))
+        body = self.api('getPlaylist', {'id': public['id']})['playlist']
+        self.assertEqual((public['songCount'], body['songCount'], len(body['entry'])), (75, 75, 75))
+        self.assertTrue(all(s['id'].startswith('cache-') for s in body['entry']))
+        # A background retry that actually succeeds restores the track.
+        self.cache(identifier('netease', '75'))
+        self.assertEqual(self.api('getPlaylist', {'id': public['id']})['playlist']['songCount'], 76)
+
+    def test_cache_and_untried_stay_visible_failed_and_empty_charts_hidden(self):
+        self.cache(self.ids[0])
+        self.app.catalog.exclude(self.ids[1], 'audio_download_failed')
+        lists = self.api('getPlaylists')['playlists']['playlist']
+        self.assertEqual([p['songCount'] for p in lists], [1, 1])
+        self.app.catalog.exclude(self.ids[0], 'audio_download_failed')
+        # A good cached file remains usable even if the remote source fails.
+        self.assertEqual(self.api('getPlaylist', {'id': 'netease-hot'})['playlist']['songCount'], 1)
+        (self.app.media.folder / (self.ids[0] + '.mp3')).unlink()
+        self.assertEqual(len(self.api('getPlaylists')['playlists']['playlist']), 1)
+
+    def test_manual_failed_download_hides_track_but_memory_pause_does_not(self):
+        from memory_budget import BackgroundPaused
+        key = self.ids[0]
+        (self.app.media.folder / (key + '.mp3')).unlink()
+        with patch('media.resolve', side_effect=ValueError('audio missing')):
+            with self.assertRaises(ValueError): self.app.media.prepare(key)
+        self.assertNotIn(key, [row['key'] for row in self.app.catalog.playlist_rows('netease-hot')])
+        (self.app.media.folder / (self.ids[1] + '.mp3')).unlink()
+        self.app.media.players = 1
+        with self.assertRaises(BackgroundPaused): self.app.media.prepare(self.ids[1], background=True)
+        self.app.media.players = 0
+        self.assertIn(self.ids[1], [row['key'] for row in self.app.catalog.playlist_rows('netease-hot')])

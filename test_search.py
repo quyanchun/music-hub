@@ -20,7 +20,7 @@ class OnlineTests(HTTPFixture):
             found = self.api('search3', {'query': 'outside'})['searchResult3']['song']
             self.assertEqual(len(found), 1)
             key = found[0]['id']
-            self.assertEqual(search.call_count, 5)
+            self.assertEqual(search.call_count, 6)
             check.assert_called_once_with(song, verify_duration=True)
             self.assertEqual(self.api('getSong', {'id': key})['song']['id'], key)
             self.assertTrue(self.api('getAlbum', {'id': found[0]['albumId']})['album']['song'])
@@ -37,7 +37,7 @@ class OnlineTests(HTTPFixture):
                 self.assertEqual(reopened.search('outside'), [key])
             finally:
                 reopened.close()
-            self.assertEqual(search.call_count, 5)
+            self.assertEqual(search.call_count, 6)
 
     def test_paid_trial_unknown_and_failed_source_never_admitted(self):
         free, trial, paid, unknown = [record(n) for n in ('free', 'trial', 'paid', 'unknown')]
@@ -102,7 +102,7 @@ class OnlineTests(HTTPFixture):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 answers = list(pool.map(lambda _: self.app.search.search('shared'), range(2)))
             self.assertEqual(answers[0], answers[1])
-            self.assertEqual(network.call_count, 5)
+            self.assertEqual(network.call_count, 6)
 
 
 class ProbeTests(__import__('unittest').TestCase):

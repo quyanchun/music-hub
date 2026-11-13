@@ -97,9 +97,9 @@ class SourceHealthTests(HTTPFixture):
         for _ in range(2):worker.retry(key,ValueError('source down'))
         def cached(*args,**kwargs):
             path=self.app.media.folder/(key+'.mp3');path.write_bytes(self.audio)
-            return self.app.media.register(key,self.app.catalog.song(key),path,180,hashlib.sha256(self.audio).hexdigest())
+            return self.app.media.register(key,self.app.catalog.song(key,allow_unavailable=True),path,180,hashlib.sha256(self.audio).hexdigest())
         with patch.object(self.app.media,'prepare',side_effect=cached):
-            worker.fetch(key,self.app.catalog.song(key))
+            worker.fetch(key,self.app.catalog.song(key,allow_unavailable=True))
         self.assertEqual(self.health()['netease']['failures'],0)
         worker.retry(key,ValueError('source down'))
         path=self.app.media.folder/(key+'.mp3');os.utime(path,(time.time()-100,)*2)

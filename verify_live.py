@@ -44,11 +44,12 @@ def main():
     assert json.loads(failure)['subsonic-response']['error']['code'] == 40
     results['checks']['json_xml_and_token_auth'] = True
     folders = api('getMusicFolders')['musicFolders']['musicFolder']
-    assert len(folders) == 5
+    assert len(folders) == 6
     playlists = api('getPlaylists')['playlists']['playlist']
-    assert len([p for p in playlists if p['id']!='cached-songs' and not p['id'].startswith('pl-')]) == 15
+    assert playlists[0]['id'] == 'cached-songs'
+    assert all(p['songCount'] > 0 for p in playlists[1:])
     results['playlists'] = [{'name': p['name'], 'songs': p['songCount']} for p in playlists]
-    results['checks']['fifteen_chart_playlists'] = True
+    results['checks']['cache_first_and_empty_playlists_hidden'] = True
     all_songs, offset = [], 0
     while True:
         batch = api('search3', {'query': '', 'songCount': 500, 'songOffset': offset,
@@ -62,7 +63,7 @@ def main():
     # Background discovery can change the count between pagination and this request.
     results['scan_count_at_end'] = scan['count']
     results['songs'] = len(all_songs)
-    results['sources'] = {name: sum(s['genre'] == name for s in all_songs) for name in ('网易云', '酷我', 'QQ音乐', '酷狗', '咪咕')}
+    results['sources'] = {name: sum(s['genre'] == name for s in all_songs) for name in ('网易云', '酷我', 'QQ音乐', '酷狗', '咪咕', 'B站音频区')}
     results['scan'] = scan
     results['checks']['complete_paginated_library'] = True
     sample = all_songs[0]
@@ -111,7 +112,7 @@ def main():
                     attempts.append(type(error).__name__)
             else:
                 results['audio'].append({'source': name, 'ok': False, 'attempts': attempts})
-        results['checks']['audio_all_five_sources'] = all(a['ok'] for a in results['audio']) and len(results['audio']) == 5
+        results['checks']['audio_all_six_sources'] = all(a['ok'] for a in results['audio']) and len(results['audio']) == 6
     Path(args.report).write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps(results, ensure_ascii=False, indent=2), flush=True)
     if not all(results['checks'].values()):

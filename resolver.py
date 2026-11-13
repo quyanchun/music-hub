@@ -15,7 +15,7 @@ sys.path[:0] = [str(PROVIDERS), str(PROVIDERS / 'vendor')]
 from music_dl import config
 config.init()
 
-NAMES = {'netease': '网易云', 'kuwo': '酷我', 'qq': 'QQ音乐', 'kugou': '酷狗', 'migu': '咪咕'}
+NAMES = {'netease': '网易云', 'kuwo': '酷我', 'qq': 'QQ音乐', 'kugou': '酷狗', 'migu': '咪咕', 'bilibili': 'B站音频区'}
 class AudioInspector:
     def __init__(self):
         self.condition = threading.Condition()
@@ -102,19 +102,23 @@ def resolve(song):
     elif source == 'migu':
         import migu
         url, headers = migu.resolve_audio(song['id']), migu.LISTEN_HEADERS
+    elif source == 'bilibili':
+        import bilibili
+        url, headers = bilibili.resolve_audio(song['id']), bilibili.HEADERS
     else:
         raise ValueError('unsupported_source')
     parsed = urlsplit(url)
     host = (parsed.hostname or '').lower()
     domains = {'netease': ('music.126.net', 'music.163.com'), 'kuwo': ('kuwo.cn',),
-               'kugou': ('kugou.com',), 'qq': ('qqmusic.qq.com', 'qmusic.qq.com'), 'migu': ('migu.cn',)}
-    if parsed.scheme not in ('http', 'https') or not any(host == d or host.endswith('.' + d) for d in domains[source]):
+               'kugou': ('kugou.com',), 'qq': ('qqmusic.qq.com', 'qmusic.qq.com'), 'migu': ('migu.cn',),
+               'bilibili': ('bilivideo.com',)}
+    if parsed.scheme not in ('http', 'https') or parsed.username or not any(host == d or host.endswith('.' + d) for d in domains[source]):
         raise ValueError('unexpected_audio_host')
     suffix = parsed.path.rsplit('.', 1)[-1].lower()
     if source == 'kuwo' and audio.get('format') in ('mp3', 'aac', 'm4a'):
         suffix = audio['format']
     if suffix not in ('mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav', 'ape'):
-        suffix = 'mp3'
+        suffix = 'm4a' if source == 'bilibili' else 'mp3'
     return url, {**headers, 'Accept-Encoding': 'identity'}, suffix
 
 

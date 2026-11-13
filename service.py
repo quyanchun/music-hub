@@ -197,9 +197,12 @@ class App(ThreadingHTTPServer):
         if endpoint == 'getPlaylist':
             if params['id'] == CACHE_PLAYLIST:
                 return {'playlist': self.media.playlist(self.account['username'], entries=True)}
+            self.media.prune_missing()
             header = next((p for p in self.catalog.playlist_headers(self.account['username']) if p['id']==params['id']), None)
             if header is None: raise KeyError(params['id'])
-            return {'playlist': {**header,'entry':[song_entry(row) for row in self.catalog.playlist_rows(params['id'])]}}
+            entries = [dict(song_entry(row), id=('cache-' if row['cache_file'] else '') + row['key'])
+                       for row in self.catalog.playlist_rows(params['id'])]
+            return {'playlist': {**header, 'songCount': len(entries), 'entry': entries}}
         if params.get('id','').startswith('cache-'):
             params = {**params, 'id':params['id'][6:]}
         search_keys = None
