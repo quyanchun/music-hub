@@ -13,6 +13,7 @@ services:
       - /tmp:rw,noexec,nosuid,size=32m,mode=1777
     environment:
       TZ: Asia/Shanghai
+      MUSICHUB_CACHE_INTERVAL: "${MUSICHUB_CACHE_INTERVAL:-60}"
     security_opt:
       - no-new-privileges:true
     cap_drop:

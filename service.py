@@ -23,7 +23,7 @@ import zlib
 from catalog import Catalog
 from discovery import Discovery
 from library import FOLDERS, Library, matches, song_entry
-from media import MediaCache, CachedSongs, CACHE_PLAYLIST
+from media import MediaCache, CachedSongs, CACHE_PLAYLIST, display_name
 from maintenance import Maintenance
 from metadata import MetadataCache, structured_lyrics
 from online_search import OnlineSearch
@@ -459,7 +459,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
             if urlsplit(self.path).path.endswith(('download', 'download.view')):
                 record = self.server.catalog.song(key)
-                self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + quote(record['title'] + file.suffix))
+                self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + quote(display_name(record, file.suffix)))
             self.end_headers()
             if self.command == 'HEAD':
                 return

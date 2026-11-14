@@ -215,22 +215,36 @@ class PersistentCacheTests(HTTPFixture):
         playlists=ET.fromstring(body).find('{*}playlists')
         self.assertEqual(playlists[0].attrib['id'],CACHE_PLAYLIST)
 
-    def test_continuous_three_minute_downloads_survive_restart_and_hour_boundary(self):
-        for n in range(25):insert(self.app.catalog,record('paced-'+str(n)))
+    def test_download_interval_defaults_to_one_minute_and_is_configurable(self):
+        with patch.dict(os.environ):
+            os.environ.pop('MUSICHUB_CACHE_INTERVAL', None)
+            self.assertEqual(Prefetch(self.app.catalog,self.app.media,self.app.search).download_interval,60)
+            os.environ['MUSICHUB_CACHE_INTERVAL']='180'
+            worker=Prefetch(self.app.catalog,self.app.media,self.app.search)
+            self.assertEqual(worker.download_interval,180)
+            worker.next_reconcile=time.time()+600
+            with patch('prefetch.background_allowed',return_value=True),patch.object(worker,'download',return_value=None) as download:
+                before=time.time();worker.step();download.assert_called_once()
+            self.assertGreaterEqual(self.app.catalog.status()['prefetch']['next_download'],before+180)
+            os.environ['MUSICHUB_CACHE_INTERVAL']='5'
+            self.assertEqual(Prefetch(self.app.catalog,self.app.media,self.app.search).download_interval,60)
+
+    def test_continuous_one_minute_downloads_survive_restart_and_hour_boundary(self):
+        for n in range(65):insert(self.app.catalog,record('paced-'+str(n)))
         worker=self.app.prefetch
         start=(int(time.time()//3600)+1)*3600
         worker.next_reconcile=start+7200
         clock=[start]
         def download(key):return self.cached(key).stem
         with patch('prefetch.time.time',side_effect=lambda:clock[0]),patch('prefetch.background_allowed',return_value=True),patch.object(worker,'download',side_effect=download) as network:
-            for n in range(20):
-                clock[0]=start+n*180
+            for n in range(60):
+                clock[0]=start+n*60
                 worker.step()
                 self.assertEqual(network.call_count,n+1)
                 clock[0]+=1
                 worker.step()  # No burst while waiting for the next download slot.
                 self.assertEqual(network.call_count,n+1)
-            self.assertEqual(self.app.media.summary()['count'],20)
+            self.assertEqual(self.app.media.summary()['count'],60)
             reopened=Prefetch(self.app.catalog,self.app.media,self.app.search)
             reopened.next_reconcile=start+7200
             with patch.object(reopened,'download',side_effect=download) as resumed:
@@ -238,9 +252,9 @@ class PersistentCacheTests(HTTPFixture):
                 reopened.step();resumed.assert_not_called()
                 clock[0]=start+3600
                 reopened.step();resumed.assert_called_once()
-            self.assertEqual(self.app.media.summary()['count'],21)
+            self.assertEqual(self.app.media.summary()['count'],61)
 
-    def test_failures_and_duplicates_keep_three_minute_cadence_without_counting_success(self):
+    def test_failures_and_duplicates_keep_one_minute_cadence_without_counting_success(self):
         worker=self.app.prefetch
         start=(int(time.time()//3600)+1)*3600
         clock=[start]
@@ -254,11 +268,11 @@ class PersistentCacheTests(HTTPFixture):
             clock[0]+=10
             with patch.object(worker,'download') as early:
                 worker.step();early.assert_not_called()
-            clock[0]=start+180
+            clock[0]=start+60
             with patch.object(worker,'download',side_effect=duplicate) as aliased:
                 worker.step();aliased.assert_called_once()
             insert(self.app.catalog,record('new-after-duplicate'))
-            clock[0]=start+360
+            clock[0]=start+120
             with patch.object(worker,'download',side_effect=lambda key:self.cached(key).stem) as new:
                 worker.step();new.assert_called_once()
         with self.app.catalog.connect() as db:

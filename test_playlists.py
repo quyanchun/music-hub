@@ -110,6 +110,12 @@ class PublicPlaylistTests(HTTPFixture):
         status, headers, raw = self.request('stream', {'id': key}, {'Range': 'bytes=0-1023'})
         self.assertEqual((status, headers['Content-Type'], len(raw)), (206, 'audio/aac', 1024))
         import os
+        # 恢复历史 ID 文件时会自动改成「歌曲名 - 歌手名」，之后路径以数据库记录为准。
+        hit = self.app.media.cached(key)
+        self.assertIsNotNone(hit)
+        target = hit[1]
+        self.assertTrue(target.name.endswith('.aac'))
+        self.assertNotRegex(target.stem, r'^[a-f0-9]{32}$')
         os.utime(target, (time.time() - 90000,) * 2)
         self.app.maintenance.run()
         self.assertTrue(target.exists())

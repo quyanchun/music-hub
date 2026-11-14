@@ -22,12 +22,29 @@ MAX_FILE = 40 * 1024 * 1024
 MAX_CACHE = 20_000_000_000
 AUDIO_SUFFIXES = {'.mp3', '.aac', '.m4a', '.ogg', '.flac', '.wav', '.ape'}
 CACHE_PLAYLIST = 'cached-songs'
+# 缓存文件直接面向用户：拷贝到其它设备时应当能一眼看出歌名与歌手。
+FILENAME_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
+FILENAME_MAX_BYTES = 120
+LEGACY_ID = re.compile(r'[a-f0-9]{32}')
 
 
 def recording_key(record):
+    """录音身份 = 归一化歌名 + 排序后的歌手集合；同名同歌手只保留一份缓存。"""
     artist = record.get('singer') or record.get('artist') or '未知歌手'
     names = sorted(artist_names(artist))
     return hashlib.sha256((normalized(record['title']) + '\0' + '\0'.join(names)).encode()).hexdigest()
+
+
+def display_name(record, suffix='.mp3'):
+    """把缓存文件命名为「歌曲名 - 歌手名.mp3」，可直接拷贝出去使用。"""
+    title = str(record.get('title') or '未知歌曲').strip()
+    artist = str(record.get('singer') or record.get('artist') or '未知歌手').strip()
+    base = FILENAME_ILLEGAL.sub('·', f'{title} - {artist}')
+    base = re.sub(r'\s+', ' ', base).strip(' .') or '未知歌曲'
+    # 按 UTF-8 字节截断：ext4 单文件名为 255 字节，留出后缀与序号余量，
+    # 也避免拷到 NTFS/exFAT 等按 UTF-16 计长的文件系统时被系统截断。
+    base = base.encode('utf-8')[:FILENAME_MAX_BYTES].decode('utf-8', 'ignore').rstrip(' .') or '未知歌曲'
+    return base + suffix
 
 
 def cache_day():
@@ -85,6 +102,34 @@ class MediaCache:
             ''')
 
         catalog.has_audio = True
+        self.migrate_names()
+
+    def migrate_names(self):
+        """把历史 <id>.<ext> 缓存改成可读名；纯重命名，不动内部 id、别名与每日批次。"""
+        with self.guard:
+            with self.catalog.connect() as db:
+                rows = db.execute('''SELECT f.id, f.path,
+                    (SELECT s.data FROM songs s WHERE s.id=f.id) AS data,
+                    (SELECT s.data FROM songs s WHERE s.id=
+                        (SELECT a.song_id FROM audio_aliases a WHERE a.file_id=f.id LIMIT 1) LIMIT 1) AS alias_data
+                    FROM audio_files f''').fetchall()
+            changed = 0
+            for row in rows:
+                old = row['path']
+                if not LEGACY_ID.fullmatch(Path(old).stem):
+                    continue
+                source = self.folder / old
+                if not source.is_file() or source.is_symlink():
+                    continue
+                data = row['data'] or row['alias_data']
+                record = json.loads(data) if data else {}
+                name = self.unique_name(record, source.suffix, row['id'])
+                target = self.folder / name
+                os.replace(source, target)
+                with self.catalog.connect() as db:
+                    db.execute('UPDATE audio_files SET path=? WHERE id=?', (name, row['id']))
+                changed += 1
+            return changed
 
     def summary(self):
         with self.catalog.connect() as db:
@@ -124,15 +169,41 @@ class MediaCache:
         return None
 
     def equivalent(self, record):
+        """按「歌曲名 + 歌手名」去重，不再要求时长一致：跨音源的同一首歌共用一份缓存。"""
         with self.catalog.connect() as db:
-            rows = db.execute('SELECT * FROM audio_files WHERE identity=? AND abs(duration-?)<=3 AND verified=1 LIMIT 8',
-                              (recording_key(record), seconds(record)))
+            rows = db.execute('SELECT * FROM audio_files WHERE identity=? AND verified=1 LIMIT 8',
+                              (recording_key(record),))
             for row in rows:
                 try:
                     return row, self.path(row)
                 except KeyError:
                     continue
         return None
+
+    def unique_name(self, record, suffix, file_id):
+        """可读名冲突时追加序号，避免覆盖别的缓存文件。"""
+        base = display_name(record, suffix)
+        stem = base[:-len(suffix)]
+        candidate, number = base, 2
+        with self.catalog.connect() as db:
+            while True:
+                row = db.execute('SELECT id FROM audio_files WHERE path=?', (candidate,)).fetchone()
+                owner = row['id'] if row else None
+                on_disk = (self.folder / candidate).exists()
+                # 无人占用，或占用的正是本次要登记的文件；孤儿同名文件另起序号，绝不覆盖。
+                if owner in (None, file_id) and (not on_disk or owner == file_id):
+                    return candidate
+                candidate = f'{stem} ({number}){suffix}'
+                number += 1
+
+    def file_id_for(self, name):
+        """文件名 → 内部 id。可读名查数据库，旧版 32 位 id 名仍可直接反推。"""
+        with self.catalog.connect() as db:
+            row = db.execute('SELECT id FROM audio_files WHERE path=?', (name,)).fetchone()
+        if row:
+            return row['id']
+        stem = Path(name).stem
+        return stem if LEGACY_ID.fullmatch(stem) else None
 
     def bind(self, song_id, file_id):
         with self.guard, self.catalog.connect() as db:
@@ -142,11 +213,11 @@ class MediaCache:
             db.execute('INSERT OR REPLACE INTO audio_aliases VALUES (?,?)', (song_id, file_id))
             db.execute("UPDATE songs SET media=json_set(media,'$.suffix',?,'$.size',?,'$.duration',?) WHERE id=?",(Path(row['path']).suffix[1:],row['size'],round(row['duration']),song_id))
 
-    def register(self, song_id, record, path, duration, digest, verified=True):
+    def register(self, song_id, record, path, duration, digest, verified=True, display=False):
         with self.guard:
-            return self._register(song_id, record, path, duration, digest, verified)
+            return self._register(song_id, record, path, duration, digest, verified, display)
 
-    def _register(self, song_id, record, path, duration, digest, verified):
+    def _register(self, song_id, record, path, duration, digest, verified, display=False):
         if verified:
             equivalent = self.equivalent(record)
             if equivalent and equivalent[0]['id'] != song_id:
@@ -164,15 +235,24 @@ class MediaCache:
                 return existing
             except KeyError:
                 pass
+        # display=True 时把内部临时文件名改成可读名。先写库再改名：若中途崩溃，
+        # 磁盘上仍是 <id>.<ext>，reconcile 可用旧格式把它恢复并再次改名。
+        target, stored_name = path, path.name
+        if display and LEGACY_ID.fullmatch(path.stem):
+            stored_name = self.unique_name(record, path.suffix, song_id)
+            target = self.folder / stored_name
+        size = path.stat().st_size
         with self.catalog.connect() as db:
             db.execute('INSERT OR REPLACE INTO audio_files VALUES (?,?,?,?,?,?,?,?)',
-                       (song_id, recording_key(record), duration, path.name, path.stat().st_size, digest,
+                       (song_id, recording_key(record), duration, stored_name, size, digest,
                         path.stat().st_mtime, int(verified)))
             db.execute('INSERT OR REPLACE INTO audio_aliases VALUES (?,?)', (song_id, song_id))
             if verified:
-                db.execute("UPDATE songs SET media=json_set(media,'$.suffix',?,'$.size',?,'$.duration',?,'$.duration_verified',json('true')) WHERE id=?",(path.suffix[1:],path.stat().st_size,round(duration),song_id))
+                db.execute("UPDATE songs SET media=json_set(media,'$.suffix',?,'$.size',?,'$.duration',?,'$.duration_verified',json('true')) WHERE id=?",(path.suffix[1:],size,round(duration),song_id))
             db.execute("INSERT OR REPLACE INTO meta VALUES ('cache_changed',?)", (json.dumps(time.time()),))
-        return path
+        if target != path:
+            os.replace(path, target)
+        return target
 
     def protected(self, file_id):
         lock = self.locks.get(file_id)
@@ -188,11 +268,16 @@ class MediaCache:
             with self.catalog.connect() as db, os.scandir(self.folder) as files:
                 total = 0
                 for item in files:
-                    if item.is_symlink() or not item.is_file() or not re.fullmatch(r'[a-f0-9]{32}\.(mp3|aac|m4a|ogg|flac|wav|ape|part)',item.name): continue
-                    key = Path(item.name).stem
+                    if item.is_symlink() or not item.is_file(): continue
+                    suffix = Path(item.name).suffix
+                    if suffix not in AUDIO_SUFFIXES and suffix != '.part': continue
+                    row = db.execute('SELECT id FROM audio_files WHERE path=?', (item.name,)).fetchone()
+                    key = row['id'] if row else None
+                    if key is None and LEGACY_ID.fullmatch(Path(item.name).stem):
+                        key = Path(item.name).stem
                     stale = time.time()-item.stat().st_mtime>3600
-                    known = not stale or bool(db.execute('SELECT 1 FROM songs WHERE id=?',(key,)).fetchone())
-                    if stale and (item.name.endswith('.part') or not known) and not self.protected(key):
+                    known = not stale or bool(key and db.execute('SELECT 1 FROM songs WHERE id=?',(key,)).fetchone())
+                    if stale and (suffix == '.part' or not known) and (not key or not self.protected(key)):
                         Path(item.path).unlink(missing_ok=True)
                         continue
                     total += item.stat().st_size
@@ -228,7 +313,9 @@ class MediaCache:
         try:
             path = self.prepare(key, local_only=local_only)
             with self.guard:
-                actual = path.stem
+                # 文件名已是可读名，内部 id 只能从数据库记录取，不能再靠 path.stem。
+                resolved = self.cached(key)
+                actual = resolved[0]['id'] if resolved else file_id
                 if actual != file_id:
                     self.pins[file_id] -= 1
                     if not self.pins[file_id]: del self.pins[file_id]
@@ -261,7 +348,7 @@ class MediaCache:
             # Legacy cache hits remain usable; the background reconciler verifies them.
             for path in self.folder.glob(song_id + '.*'):
                 if path.suffix in AUDIO_SUFFIXES and not path.is_symlink() and path.stat().st_size:
-                    return self.register(song_id, record, path, seconds(record), '', verified=False)
+                    return self.register(song_id, record, path, seconds(record), '', verified=False, display=True)
             if background and (self.players or not background_allowed()):
                 raise BackgroundPaused('前台播放或内存压力，稍后继续')
             if background:
@@ -308,7 +395,7 @@ class MediaCache:
                 target = self.folder / (song_id + '.' + suffix)
                 os.replace(partial, target)
                 with self.guard:
-                    return self.register(song_id, record, target, duration, digest.hexdigest())
+                    return self.register(song_id, record, target, duration, digest.hexdigest(), display=True)
             except (requests.RequestException, ValueError, subprocess.SubprocessError) as error:
                 if '磁盘剩余空间不足' not in str(error):
                     self.catalog.exclude(song_id, 'audio_download_failed')
@@ -333,18 +420,21 @@ class MediaCache:
                     except KeyError: pass
             return False
         path = Path(item.path)
-        if item.is_symlink() or not item.is_file() or not re.fullmatch(r'[a-f0-9]{32}\.(mp3|aac|m4a|ogg|flac|wav|ape|part)', item.name): return True
+        if item.is_symlink() or not item.is_file(): return True
+        if path.suffix not in AUDIO_SUFFIXES and path.suffix != '.part': return True
         if path.suffix == '.part':
             lock = self.locks.get(path.stem)
             if time.time() - item.stat().st_mtime > 3600 and not (lock and lock.locked()): path.unlink(missing_ok=True)
             return True
-        hit = self.cached(path.stem, verified=True)
+        key = self.file_id_for(item.name)
+        if key is None: return True  # 无法归属的孤儿文件，由 cleanup 按过期策略处理
+        hit = self.cached(key, verified=True)
         if hit: return True
         if self.players or not background_allowed(): raise BackgroundPaused('等待后台校验预算')
         try:
             with self.catalog.connect() as db:
-                row = db.execute('SELECT data FROM songs WHERE id=?',(path.stem,)).fetchone()
-            if row is None: raise KeyError(path.stem)
+                row = db.execute('SELECT data FROM songs WHERE id=?',(key,)).fetchone()
+            if row is None: raise KeyError(key)
             record = json.loads(row['data'])
             if blocked(record): raise ValueError('membership_or_trial')
             info = inspect_audio(path, background=True)
@@ -354,11 +444,11 @@ class MediaCache:
             digest = hashlib.sha256()
             with path.open('rb') as stream:
                 while chunk := stream.read(65536): digest.update(chunk)
-            with self.guard: self.register(path.stem, record, path, duration, digest.hexdigest())
+            with self.guard: self.register(key, record, path, duration, digest.hexdigest(), display=True)
         except (KeyError, ValueError, subprocess.CalledProcessError):
             with self.guard:
-                if not self.protected(path.stem):
-                    path.unlink(missing_ok=True); self.forget(path.stem)
+                if not self.protected(key):
+                    path.unlink(missing_ok=True); self.forget(key)
         return True
 
     def entry(self, file_id):

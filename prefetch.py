@@ -16,7 +16,7 @@ class Prefetch:
         self.catalog, self.media, self.search = catalog, media, search
         self.interval = max(5, float(os.environ.get('MUSICHUB_PREFETCH_INTERVAL', '10')))
         self.daily_size = 50
-        self.download_interval = max(180, float(os.environ.get('MUSICHUB_CACHE_INTERVAL', '180')))
+        self.download_interval = max(60, float(os.environ.get('MUSICHUB_CACHE_INTERVAL', '60')))
         self.lock = threading.Lock()
         self.next_reconcile = 0
 
@@ -110,7 +110,8 @@ class Prefetch:
         except ValueError as error:
             if '磁盘剩余空间不足' in str(error): raise BackgroundPaused('等待磁盘空间') from error
             raise
-        hit = self.media.cached(path.stem, verified=True)
+        # 文件名是可读名，不能再用 path.stem 反查；按 song_id 走别名表拿真实记录。
+        hit = self.media.cached(key, verified=True)
         if not hit: raise BackgroundPaused('等待已有文件完整校验')
         if not already_cached: self.source_result(record['source'])
         return hit[0]['id']
